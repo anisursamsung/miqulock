@@ -134,11 +134,9 @@ void Config::load_file(const std::string& path, int depth) {
 
 void Config::load() {
     set_defaults();
-    // 1. Load from miquland compositor config
-    load_file("~/.config/miquland/miquland.conf");
-    // 2. Load from theme mode if present
-    load_file("~/.config/miquland/theme/theme_mode.conf");
-    // 3. Override with miqulock specific config if present
+    // 1. Load system-wide defaults if present
+    load_file("/usr/share/miqulock/miqulock.conf");
+    // 2. Load user-specific config if present
     load_file("~/.config/miqulock/miqulock.conf");
 }
 
