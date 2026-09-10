@@ -328,14 +328,46 @@ void LockSurface::draw(cairo_t* cr) {
         }
     }
 
+    double status_y = pill_y + pill_h + 28;
+
+    // Caps Lock indicator badge
+    if (m_app->is_caps_lock_active()) {
+        std::string caps_text = "CAPS LOCK ACTIVE";
+        cairo_set_font_size(cr, 11.0);
+        cairo_select_font_face(cr, config.get_font_family().c_str(), CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_text_extents_t cext;
+        cairo_text_extents(cr, caps_text.c_str(), &cext);
+
+        double pad_x = 12.0;
+        double pad_y = 5.0;
+        double badge_w = cext.width + 2 * pad_x;
+        double badge_h = cext.height + 2 * pad_y;
+        double badge_x = center_x - (badge_w / 2.0);
+        double badge_y = pill_y + pill_h + 14.0;
+
+        draw_rounded_rectangle(cr, badge_x, badge_y, badge_w, badge_h, badge_h / 2.0);
+        cairo_set_source_rgba(cr, primary.r, primary.g, primary.b, 0.20);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, primary.r, primary.g, primary.b, 0.75);
+        cairo_set_line_width(cr, 1.2);
+        cairo_stroke(cr);
+
+        cairo_set_source_rgba(cr, on_surface.r, on_surface.g, on_surface.b, 0.95);
+        cairo_move_to(cr, badge_x + pad_x - cext.x_bearing, badge_y + pad_y - cext.y_bearing);
+        cairo_show_text(cr, caps_text.c_str());
+
+        status_y = badge_y + badge_h + 18.0;
+    }
+
     // Status Message below input
     if (m_app->is_auth_failed()) {
         std::string err_msg = "Incorrect Password. Try again.";
+        cairo_select_font_face(cr, config.get_font_family().c_str(), CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 14.0);
         cairo_text_extents_t eext;
         cairo_text_extents(cr, err_msg.c_str(), &eext);
         cairo_set_source_rgba(cr, err_col.r, err_col.g, err_col.b, 0.95);
-        cairo_move_to(cr, center_x - (eext.width / 2.0), pill_y + pill_h + 30);
+        cairo_move_to(cr, center_x - (eext.width / 2.0), status_y);
         cairo_show_text(cr, err_msg.c_str());
     }
 }

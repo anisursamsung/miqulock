@@ -38,7 +38,9 @@ public:
     std::string get_username() const;
     bool is_verifying() const;
     bool is_auth_failed() const { return m_auth_failed; }
+    bool is_caps_lock_active() const { return m_caps_lock_active; }
     double get_shake_offset() const;
+    void clear_password();
 
     // Internal handlers called by wayland callbacks
     void handle_global(struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version);
@@ -69,7 +71,22 @@ private:
     std::string m_password;
     bool m_running = true;
     bool m_auth_failed = false;
+    bool m_caps_lock_active = false;
     std::chrono::steady_clock::time_point m_fail_time;
+
+    int m_timer_fd = -1;
+    int m_signal_fd = -1;
+    int m_inotify_fd = -1;
+    int m_inotify_dir_wd = -1;
+    int m_inotify_file_wd = -1;
+
+    void setup_timer();
+    void set_timer_interval_ms(int ms);
+    void setup_inotify();
+    void cleanup_inotify();
+    void handle_inotify();
+    void setup_signals();
+    void cleanup_signals();
 };
 
 } // namespace miqulock

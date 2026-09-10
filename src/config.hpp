@@ -16,7 +16,12 @@ class Config {
 public:
     static Config& get();
 
-    void load();
+    void load(const std::string& custom_path = "");
+    void reload();
+    const std::string& get_config_path() const { return m_config_path; }
+
+    static std::string get_user_config_path();
+    static std::string ensure_user_config();
 
     const Color& get_primary_color() const { return m_primary; }
     const Color& get_on_primary_color() const { return m_on_primary; }
@@ -39,6 +44,8 @@ private:
     void set_defaults();
     void load_file(const std::string& path, int depth = 0);
     std::string resolve_path(const std::string& path) const;
+
+    std::string m_config_path;
 
     Color m_primary;
     Color m_on_primary;

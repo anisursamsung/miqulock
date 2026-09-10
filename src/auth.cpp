@@ -96,6 +96,11 @@ void AuthManager::authenticate_async(const std::string& password, std::function<
             pam_end(pamh, ret);
         }
 
+        if (!auth_data.password.empty()) {
+            explicit_bzero(auth_data.password.data(), auth_data.password.size());
+            auth_data.password.clear();
+        }
+
         m_authenticating = false;
         if (callback) {
             callback(success);

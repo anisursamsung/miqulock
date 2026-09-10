@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <iostream>
+#include <vector>
 
 namespace miqulock {
 
@@ -132,12 +133,78 @@ void Config::load_file(const std::string& path, int depth) {
     }
 }
 
-void Config::load() {
+std::string Config::get_user_config_path() {
+    const char* xdg_config = getenv("XDG_CONFIG_HOME");
+    if (xdg_config && *xdg_config) {
+        return std::string(xdg_config) + "/miqulock/miqulock.conf";
+    }
+    const char* home = getenv("HOME");
+    if (home && *home) {
+        return std::string(home) + "/.config/miqulock/miqulock.conf";
+    }
+    return "";
+}
+
+std::string Config::ensure_user_config() {
+    std::string user_conf = get_user_config_path();
+    if (user_conf.empty()) return "";
+
+    if (fs::exists(user_conf)) {
+        return user_conf;
+    }
+
+    fs::path user_path(user_conf);
+    std::error_code ec;
+    fs::create_directories(user_path.parent_path(), ec);
+
+    std::vector<std::string> defaults = {
+        "/usr/share/miqulock/miqulock.conf",
+        "assets/miqulock.conf",
+        "/usr/local/share/miqulock/miqulock.conf"
+    };
+
+    for (const auto& cand : defaults) {
+        if (fs::exists(cand)) {
+            fs::copy_file(cand, user_conf, fs::copy_options::overwrite_existing, ec);
+            if (!ec) {
+                std::cout << "[miqulock] Initialized user configuration: copied default to " 
+                          << user_conf << "\n";
+                return user_conf;
+            }
+        }
+    }
+
+    return user_conf;
+}
+
+void Config::load(const std::string& custom_path) {
     set_defaults();
-    // 1. Load system-wide defaults if present
-    load_file("/usr/share/miqulock/miqulock.conf");
-    // 2. Load user-specific config if present
-    load_file("~/.config/miqulock/miqulock.conf");
+
+    if (!custom_path.empty() && fs::exists(custom_path)) {
+        m_config_path = custom_path;
+        load_file(m_config_path);
+        return;
+    }
+
+    std::string user_conf = ensure_user_config();
+    if (!user_conf.empty() && fs::exists(user_conf)) {
+        m_config_path = user_conf;
+        load_file(m_config_path);
+    } else if (fs::exists("/usr/share/miqulock/miqulock.conf")) {
+        m_config_path = "/usr/share/miqulock/miqulock.conf";
+        load_file(m_config_path);
+    } else if (fs::exists("assets/miqulock.conf")) {
+        m_config_path = "assets/miqulock.conf";
+        load_file(m_config_path);
+    }
+}
+
+void Config::reload() {
+    if (!m_config_path.empty() && fs::exists(m_config_path)) {
+        set_defaults();
+        load_file(m_config_path);
+        std::cout << "[miqulock] Configuration reloaded live from " << m_config_path << "\n";
+    }
 }
 
 } // namespace miqulock
