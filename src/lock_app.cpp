@@ -1,552 +1,389 @@
 #include "lock_app.hpp"
-#include "lock_surface.hpp"
 #include "auth.hpp"
 #include "config.hpp"
-#include "ext-session-lock-v1-client-protocol.h"
-
-#include <sys/mman.h>
-#include <sys/timerfd.h>
-#include <sys/signalfd.h>
-#include <sys/inotify.h>
-#include <signal.h>
-#include <poll.h>
-#include <unistd.h>
-#include <cmath>
-#include <cstring>
-#include <algorithm>
-#include <filesystem>
 #include <iostream>
+#include <ctime>
+#include <chrono>
+#include <cctype>
 
 namespace miqulock {
 
-static const struct wl_registry_listener registry_listener = {
-    .global = [](void* data, struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_global(registry, name, interface, version);
-    },
-    .global_remove = [](void* data, struct wl_registry*, uint32_t name) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_global_remove(name);
-    }
-};
-
-static const struct ext_session_lock_v1_listener lock_listener = {
-    .locked = [](void*, struct ext_session_lock_v1*) {
-        std::cout << "[miqulock] Session successfully locked." << std::endl;
-    },
-    .finished = [](void* data, struct ext_session_lock_v1*) {
-        auto* app = static_cast<LockApp*>(data);
-        std::cerr << "[miqulock] Session lock finished/denied by compositor." << std::endl;
-        app->quit();
-    }
-};
-
-static const struct wl_seat_listener seat_listener = {
-    .capabilities = [](void* data, struct wl_seat*, uint32_t caps) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_seat_caps(caps);
-    },
-    .name = [](void*, struct wl_seat*, const char*) {}
-};
-
-static const struct wl_keyboard_listener keyboard_listener = {
-    .keymap = [](void* data, struct wl_keyboard*, uint32_t format, int32_t fd, uint32_t size) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_keymap(format, fd, size);
-    },
-    .enter = [](void*, struct wl_keyboard*, uint32_t, struct wl_surface*, struct wl_array*) {},
-    .leave = [](void*, struct wl_keyboard*, uint32_t, struct wl_surface*) {},
-    .key = [](void* data, struct wl_keyboard*, uint32_t, uint32_t, uint32_t key, uint32_t state) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_key_event(key, state);
-    },
-    .modifiers = [](void* data, struct wl_keyboard*, uint32_t, uint32_t mods_depressed,
-                    uint32_t mods_latched, uint32_t mods_locked, uint32_t group) {
-        auto* app = static_cast<LockApp*>(data);
-        app->handle_modifiers(mods_depressed, mods_latched, mods_locked, group);
-    },
-    .repeat_info = [](void*, struct wl_keyboard*, int32_t, int32_t) {}
-};
-
 LockApp::LockApp() {
-    m_xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     m_auth = std::make_unique<AuthManager>();
 }
 
 LockApp::~LockApp() {
-    clear_password();
-
-    m_surfaces.clear();
-    for (auto& out : m_outputs) {
-        wl_output_destroy(out.second);
-    }
-    m_outputs.clear();
-
-    if (m_lock) {
-        ext_session_lock_v1_destroy(m_lock);
-        m_lock = nullptr;
-    }
-    if (m_lock_manager) {
-        ext_session_lock_manager_v1_destroy(m_lock_manager);
-        m_lock_manager = nullptr;
-    }
-    if (m_keyboard) {
-        wl_keyboard_destroy(m_keyboard);
-        m_keyboard = nullptr;
-    }
-    if (m_seat) {
-        wl_seat_destroy(m_seat);
-        m_seat = nullptr;
-    }
-    if (m_shm) {
-        wl_shm_destroy(m_shm);
-        m_shm = nullptr;
-    }
-    if (m_compositor) {
-        wl_compositor_destroy(m_compositor);
-        m_compositor = nullptr;
-    }
-    if (m_registry) {
-        wl_registry_destroy(m_registry);
-        m_registry = nullptr;
-    }
-    if (m_display) {
-        wl_display_disconnect(m_display);
-        m_display = nullptr;
-    }
-    if (m_xkb_state) xkb_state_unref(m_xkb_state);
-    if (m_xkb_keymap) xkb_keymap_unref(m_xkb_keymap);
-    if (m_xkb_context) xkb_context_unref(m_xkb_context);
-
-    if (m_timer_fd >= 0) {
-        close(m_timer_fd);
-        m_timer_fd = -1;
-    }
-
-    cleanup_inotify();
-    cleanup_signals();
-}
-
-void LockApp::clear_password() {
-    if (!m_password.empty()) {
-        explicit_bzero(m_password.data(), m_password.size());
-        m_password.clear();
-    }
-}
-
-std::string LockApp::get_username() const {
-    return m_auth ? m_auth->get_current_username() : "User";
-}
-
-bool LockApp::is_verifying() const {
-    return m_auth ? m_auth->is_authenticating() : false;
-}
-
-double LockApp::get_shake_offset() const {
-    if (!m_auth_failed) return 0.0;
-
-    auto now = std::chrono::steady_clock::now();
-    double elapsed_sec = std::chrono::duration<double>(now - m_fail_time).count();
-    if (elapsed_sec > 0.4) {
-        return 0.0;
-    }
-
-    double freq = 35.0;
-    double decay = (1.0 - elapsed_sec / 0.4);
-    return std::sin(elapsed_sec * freq) * 14.0 * decay;
-}
-
-void LockApp::handle_global(struct wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
-    if (std::string(interface) == "wl_compositor") {
-        m_compositor = static_cast<struct wl_compositor*>(
-            wl_registry_bind(registry, name, &wl_compositor_interface, std::min(version, 4u)));
-    } else if (std::string(interface) == "wl_shm") {
-        m_shm = static_cast<struct wl_shm*>(
-            wl_registry_bind(registry, name, &wl_shm_interface, 1));
-    } else if (std::string(interface) == "wl_seat") {
-        m_seat = static_cast<struct wl_seat*>(
-            wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 7u)));
-        wl_seat_add_listener(m_seat, &seat_listener, this);
-    } else if (std::string(interface) == "wl_output") {
-        auto* output = static_cast<struct wl_output*>(
-            wl_registry_bind(registry, name, &wl_output_interface, std::min(version, 4u)));
-        m_outputs.push_back({ name, output });
-
-        // If session is already locked, immediately bind LockSurface for new output (Hotplugging)
-        if (m_lock) {
-            auto surface = std::make_unique<LockSurface>(this, output);
-            surface->init();
-            m_surfaces.push_back(std::move(surface));
-            wl_display_flush(m_display);
-        }
-    } else if (std::string(interface) == "ext_session_lock_manager_v1") {
-        m_lock_manager = static_cast<struct ext_session_lock_manager_v1*>(
-            wl_registry_bind(registry, name, &ext_session_lock_manager_v1_interface, 1));
-    }
-}
-
-void LockApp::handle_global_remove(uint32_t name) {
-    for (auto it = m_outputs.begin(); it != m_outputs.end(); ++it) {
-        if (it->first == name) {
-            struct wl_output* out = it->second;
-            m_surfaces.erase(
-                std::remove_if(m_surfaces.begin(), m_surfaces.end(),
-                    [out](const std::unique_ptr<LockSurface>& s) {
-                        return s->get_wl_output() == out;
-                    }),
-                m_surfaces.end()
-            );
-            wl_output_destroy(out);
-            m_outputs.erase(it);
-            break;
-        }
-    }
-}
-
-void LockApp::handle_seat_caps(uint32_t caps) {
-    if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !m_keyboard) {
-        m_keyboard = wl_seat_get_keyboard(m_seat);
-        wl_keyboard_add_listener(m_keyboard, &keyboard_listener, this);
-    } else if (!(caps & WL_SEAT_CAPABILITY_KEYBOARD) && m_keyboard) {
-        wl_keyboard_destroy(m_keyboard);
-        m_keyboard = nullptr;
-    }
-}
-
-void LockApp::handle_keymap(uint32_t format, int32_t fd, uint32_t size) {
-    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
-        close(fd);
-        return;
-    }
-
-    char* map_shm = static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0));
-    if (map_shm == MAP_FAILED) {
-        close(fd);
-        return;
-    }
-
-    if (m_xkb_keymap) xkb_keymap_unref(m_xkb_keymap);
-    if (m_xkb_state) xkb_state_unref(m_xkb_state);
-
-    m_xkb_keymap = xkb_keymap_new_from_string(
-        m_xkb_context, map_shm, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    munmap(map_shm, size);
-    close(fd);
-
-    if (m_xkb_keymap) {
-        m_xkb_state = xkb_state_new(m_xkb_keymap);
-    }
-}
-
-void LockApp::handle_key_event(uint32_t key, uint32_t state) {
-    on_key(key, state);
-}
-
-void LockApp::handle_modifiers(uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group) {
-    if (m_xkb_state) {
-        xkb_state_update_mask(m_xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
-        bool caps = xkb_state_mod_name_is_active(m_xkb_state, XKB_MOD_NAME_CAPS, XKB_STATE_MODS_LOCKED) > 0;
-        if (caps != m_caps_lock_active) {
-            m_caps_lock_active = caps;
-            redraw_all();
-        }
-    }
-}
-
-void LockApp::setup_timer() {
-    m_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-    if (m_timer_fd < 0) {
-        std::cerr << "[miqulock] Warning: Failed to create timerfd: " << strerror(errno) << "\n";
-        return;
-    }
-    set_timer_interval_ms(1000); // Default 1-second clock tick
-}
-
-void LockApp::set_timer_interval_ms(int ms) {
-    if (m_timer_fd < 0) return;
-
-    struct itimerspec its{};
-    its.it_interval.tv_sec = ms / 1000;
-    its.it_interval.tv_nsec = (ms % 1000) * 1000000LL;
-    its.it_value = its.it_interval;
-    if (its.it_value.tv_sec == 0 && its.it_value.tv_nsec == 0) {
-        its.it_value.tv_nsec = 1;
-    }
-    timerfd_settime(m_timer_fd, 0, &its, nullptr);
-}
-
-void LockApp::setup_signals() {
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGTERM);
-    sigaddset(&mask, SIGUSR1);
-
-    if (sigprocmask(SIG_BLOCK, &mask, nullptr) < 0) {
-        std::cerr << "[miqulock] Warning: Failed to block signals: " << strerror(errno) << "\n";
-    }
-
-    m_signal_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
-    if (m_signal_fd < 0) {
-        std::cerr << "[miqulock] Warning: Failed to create signalfd: " << strerror(errno) << "\n";
-    }
-}
-
-void LockApp::cleanup_signals() {
-    if (m_signal_fd >= 0) {
-        close(m_signal_fd);
-        m_signal_fd = -1;
-    }
-}
-
-void LockApp::setup_inotify() {
-    const std::string& config_path = Config::get().get_config_path();
-    if (config_path.empty()) return;
-
-    std::filesystem::path cfg(config_path);
-    std::filesystem::path dir = cfg.parent_path();
-    if (dir.empty()) dir = ".";
-
-    m_inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    if (m_inotify_fd < 0) return;
-
-    if (std::filesystem::exists(dir)) {
-        m_inotify_dir_wd = inotify_add_watch(m_inotify_fd, dir.c_str(),
-            IN_MODIFY | IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE);
-    }
-    if (std::filesystem::exists(cfg)) {
-        m_inotify_file_wd = inotify_add_watch(m_inotify_fd, cfg.c_str(),
-            IN_MODIFY | IN_CLOSE_WRITE);
-    }
-}
-
-void LockApp::cleanup_inotify() {
-    if (m_inotify_fd >= 0) {
-        if (m_inotify_file_wd >= 0) inotify_rm_watch(m_inotify_fd, m_inotify_file_wd);
-        if (m_inotify_dir_wd >= 0) inotify_rm_watch(m_inotify_fd, m_inotify_dir_wd);
-        close(m_inotify_fd);
-        m_inotify_fd = -1;
-        m_inotify_file_wd = -1;
-        m_inotify_dir_wd = -1;
-    }
-}
-
-void LockApp::handle_inotify() {
-    char buffer[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
-    ssize_t len;
-    bool should_reload = false;
-    std::string target_file = std::filesystem::path(Config::get().get_config_path()).filename().string();
-
-    while ((len = read(m_inotify_fd, buffer, sizeof(buffer))) > 0) {
-        for (char* ptr = buffer; ptr < buffer + len; ) {
-            auto* event = reinterpret_cast<const struct inotify_event*>(ptr);
-            if (event->wd == m_inotify_file_wd) {
-                should_reload = true;
-            } else if (event->wd == m_inotify_dir_wd && event->len > 0) {
-                if (event->name == target_file) should_reload = true;
-            }
-            ptr += sizeof(struct inotify_event) + event->len;
-        }
-    }
-
-    if (should_reload) {
-        const std::string& config_path = Config::get().get_config_path();
-        if (std::filesystem::exists(config_path)) {
-            if (m_inotify_file_wd >= 0) inotify_rm_watch(m_inotify_fd, m_inotify_file_wd);
-            m_inotify_file_wd = inotify_add_watch(m_inotify_fd, config_path.c_str(),
-                IN_MODIFY | IN_CLOSE_WRITE);
-        }
-        Config::get().reload();
-        redraw_all();
-    }
+    quit();
 }
 
 bool LockApp::init() {
-    m_display = wl_display_connect(nullptr);
-    if (!m_display) {
-        std::cerr << "[miqulock] Failed to connect to Wayland display." << std::endl;
+    m_engine = miqu::AppEngine::create();
+    if (!m_engine) {
+        std::cerr << "[miqulock] Failed to initialize AppEngine. Is Wayland running?\n";
         return false;
     }
 
-    m_registry = wl_display_get_registry(m_display);
-    wl_registry_add_listener(m_registry, &registry_listener, this);
-    wl_display_roundtrip(m_display);
+    m_engine->set_quit_on_last_window_closed(false);
 
-    if (!m_compositor || !m_shm || !m_lock_manager) {
-        std::cerr << "[miqulock] Missing required Wayland globals (compositor, shm, or ext_session_lock_manager_v1)." << std::endl;
+    bool locked = false;
+    bool request_sent = m_engine->lock_session([this, &locked](bool success) {
+        if (!success) {
+            std::cerr << "[miqulock] Session lock request denied by compositor!\n";
+            m_engine->quit(1);
+            return;
+        }
+        std::cout << "[miqulock] Session locked by compositor.\n";
+        locked = true;
+    });
+
+    if (!request_sent) {
+        std::cerr << "[miqulock] Failed to request session lock.\n";
         return false;
     }
 
-    setup_timer();
-    setup_signals();
-    setup_inotify();
+    setup_lock_screens();
 
-    m_lock = ext_session_lock_manager_v1_lock(m_lock_manager);
-    ext_session_lock_v1_add_listener(m_lock, &lock_listener, this);
-
-    for (const auto& out_pair : m_outputs) {
-        auto surface = std::make_unique<LockSurface>(this, out_pair.second);
-        surface->init();
-        m_surfaces.push_back(std::move(surface));
+    // Roundtrip to process the configure and lock events
+    while (!locked && m_engine->is_session_locked()) {
+        if (wl_display_dispatch(m_engine->get_display()) < 0) {
+            return false;
+        }
     }
 
-    wl_display_roundtrip(m_display);
+    m_running = true;
+
+    // Start 1-second clock tick thread
+    m_timer_thread = std::thread([this]() {
+        while (m_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!m_running) break;
+            if (m_engine) {
+                m_engine->post([this]() {
+                    update_time_strings();
+                });
+            }
+        }
+    });
+
     return true;
 }
 
-void LockApp::run() {
-    while (m_running) {
-        while (wl_display_prepare_read(m_display) != 0) {
-            wl_display_dispatch_pending(m_display);
-        }
-        wl_display_flush(m_display);
+std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLockInstance> instance) {
+    const auto& cfg = Config::get();
+    const auto& c_bg = cfg.get_background_color();
+    const auto& c_pri = cfg.get_primary_color();
+    const auto& c_on_pri = cfg.get_on_primary_color();
+    const auto& c_surf = cfg.get_surface_color();
+    const auto& c_on_surf = cfg.get_on_surface_color();
+    const auto& c_outline = cfg.get_outline_color();
+    const auto& c_err = cfg.get_error_color();
 
-        struct pollfd pfd[4];
-        int nfds = 1;
+    miqu::Color bg_color = miqu::Color::rgba(c_bg.r, c_bg.g, c_bg.b, c_bg.a);
+    miqu::Color primary_color = miqu::Color::rgba(c_pri.r, c_pri.g, c_pri.b, c_pri.a);
+    miqu::Color on_primary_color = miqu::Color::rgba(c_on_pri.r, c_on_pri.g, c_on_pri.b, c_on_pri.a);
+    miqu::Color surface_color = miqu::Color::rgba(c_surf.r, c_surf.g, c_surf.b, c_surf.a);
+    miqu::Color on_surface_color = miqu::Color::rgba(c_on_surf.r, c_on_surf.g, c_on_surf.b, c_on_surf.a);
+    miqu::Color outline_color = miqu::Color::rgba(c_outline.r, c_outline.g, c_outline.b, c_outline.a);
+    miqu::Color error_color = miqu::Color::rgba(c_err.r, c_err.g, c_err.b, c_err.a);
 
-        pfd[0].fd = wl_display_get_fd(m_display);
-        pfd[0].events = POLLIN;
-        pfd[0].revents = 0;
+    // 1. Time View (large, prominent digital clock)
+    instance->time_view = miqu::TextViewBuilder::create()
+        ->text("00:00")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(76)
+        ->bold(true)
+        ->textColor(on_surface_color)
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->build();
 
-        int timer_idx = -1;
-        if (m_timer_fd >= 0) {
-            timer_idx = nfds++;
-            pfd[timer_idx].fd = m_timer_fd;
-            pfd[timer_idx].events = POLLIN;
-            pfd[timer_idx].revents = 0;
-        }
+    // 2. Date View (subtle, clean date string)
+    instance->date_view = miqu::TextViewBuilder::create()
+        ->text("Loading date...")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(16)
+        ->textColor(on_surface_color.with_alpha(0.70f))
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 4, 0, 24)
+        ->build();
 
-        int signal_idx = -1;
-        if (m_signal_fd >= 0) {
-            signal_idx = nfds++;
-            pfd[signal_idx].fd = m_signal_fd;
-            pfd[signal_idx].events = POLLIN;
-            pfd[signal_idx].revents = 0;
-        }
+    // 3. User Avatar & Identity
+    std::string username = m_auth->get_current_username();
+    std::string initial = username.empty() ? "U" : username.substr(0, 1);
+    for (auto& c : initial) c = static_cast<char>(std::toupper(c));
 
-        int inotify_idx = -1;
-        if (m_inotify_fd >= 0) {
-            inotify_idx = nfds++;
-            pfd[inotify_idx].fd = m_inotify_fd;
-            pfd[inotify_idx].events = POLLIN;
-            pfd[inotify_idx].revents = 0;
-        }
+    auto initial_text = miqu::TextViewBuilder::create()
+        ->text(initial)
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(22)
+        ->bold(true)
+        ->textColor(primary_color)
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->build();
 
-        int ret = poll(pfd, nfds, -1);
-        if (ret < 0) {
-            if (errno == EINTR) {
-                wl_display_cancel_read(m_display);
-                continue;
+    auto avatar_badge = miqu::CardViewBuilder::create()
+        ->backgroundColor(primary_color.with_alpha(0.15f))
+        ->stroke(2, primary_color)
+        ->cornerRadius(28)
+        ->padding(0)
+        ->addView(initial_text, miqu::LayoutParams(56, 56, miqu::Gravity::Center))
+        ->margin(0, 0, 0, 10)
+        ->build();
+
+    auto username_view = miqu::TextViewBuilder::create()
+        ->text(username)
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(17)
+        ->bold(true)
+        ->textColor(on_surface_color)
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->build();
+
+    auto subtitle_view = miqu::TextViewBuilder::create()
+        ->text("Session Locked")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(12)
+        ->textColor(on_surface_color.with_alpha(0.50f))
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 2, 0, 18)
+        ->build();
+
+    // 4. Password Input & Submit Button Row
+    instance->password_input = miqu::EditTextBuilder::create()
+        ->hint("Enter password...")
+        ->passwordMode(true)
+        ->padding(16, 10)
+        ->onSubmit([this](const std::string& pwd) {
+            verify_password(pwd);
+        })
+        ->build();
+
+    instance->password_input->set_focused(true);
+
+    auto submit_btn = miqu::ButtonBuilder::create()
+        ->text("➔")
+        ->bold(true)
+        ->textSize(16)
+        ->cornerRadius(22)
+        ->padding(10, 8)
+        ->onClick([this, instance]() {
+            if (instance && instance->password_input) {
+                verify_password(instance->password_input->get_text());
             }
-            wl_display_cancel_read(m_display);
-            break;
+        })
+        ->build();
+    submit_btn->set_custom_colors(primary_color, on_primary_color);
+
+    auto input_row = miqu::LinearLayoutBuilder::create()
+        ->orientation(miqu::Orientation::Horizontal)
+        ->gravity(miqu::Gravity::CenterVertical)
+        ->spacing(8)
+        ->addView(instance->password_input, miqu::LayoutParams(1.0f))
+        ->addView(submit_btn, miqu::LayoutParams(44, 44))
+        ->margin(0, 0, 0, 10)
+        ->build();
+
+    // 5. Status / Error View
+    instance->status_view = miqu::TextViewBuilder::create()
+        ->text("Press Enter to unlock")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(13)
+        ->textColor(on_surface_color.with_alpha(0.55f))
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->build();
+
+    // 6. Caps Lock Warning View
+    instance->caps_view = miqu::TextViewBuilder::create()
+        ->text("CAPS LOCK IS ON")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(11)
+        ->bold(true)
+        ->textColor(error_color)
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 4, 0, 0)
+        ->build();
+    instance->caps_view->set_visibility(m_caps_lock_on ? miqu::Visibility::Visible : miqu::Visibility::Gone);
+
+    // Assemble Auth Column inside the Card
+    auto auth_column = miqu::LinearLayoutBuilder::create()
+        ->orientation(miqu::Orientation::Vertical)
+        ->gravity(miqu::Gravity::CenterHorizontal)
+        ->addView(avatar_badge, miqu::LayoutParams(56, 56, miqu::Gravity::CenterHorizontal))
+        ->addView(username_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 22, miqu::Gravity::CenterHorizontal))
+        ->addView(subtitle_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 16, miqu::Gravity::CenterHorizontal))
+        ->addView(input_row, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 44))
+        ->addView(instance->status_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 18, miqu::Gravity::CenterHorizontal))
+        ->addView(instance->caps_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 16, miqu::Gravity::CenterHorizontal))
+        ->build();
+
+    // Elevated Floating Auth Card
+    auto auth_card = miqu::CardViewBuilder::create()
+        ->backgroundColor(surface_color.with_alpha(0.90f))
+        ->stroke(1, outline_color.with_alpha(0.35f))
+        ->cornerRadius(cfg.get_corner_radius())
+        ->padding(26, 24, 26, 20)
+        ->addView(auth_column, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent)))
+        ->build();
+
+    // Center Column (Clock + Date + Auth Card)
+    auto center_column = miqu::LinearLayoutBuilder::create()
+        ->orientation(miqu::Orientation::Vertical)
+        ->gravity(miqu::Gravity::CenterHorizontal)
+        ->addView(instance->time_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 80, miqu::Gravity::CenterHorizontal))
+        ->addView(instance->date_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 26, miqu::Gravity::CenterHorizontal))
+        ->addView(auth_card, miqu::LayoutParams(380, 276, miqu::Gravity::CenterHorizontal))
+        ->build();
+
+    // Root Fullscreen Card with Background Color and perfectly centered column
+    auto root_card = miqu::CardViewBuilder::create()
+        ->backgroundColor(bg_color)
+        ->cornerRadius(0)
+        ->addView(center_column, miqu::LayoutParams(380, 420, miqu::Gravity::Center))
+        ->build();
+
+    root_card->set_on_click_listener([instance]() {
+        if (instance && instance->password_input) {
+            instance->password_input->set_focused(true);
+            if (instance->window) instance->window->schedule_redraw();
         }
+    });
 
-        if (pfd[0].revents & POLLIN) {
-            wl_display_read_events(m_display);
-        } else {
-            wl_display_cancel_read(m_display);
-        }
+    return root_card;
+}
 
-        wl_display_dispatch_pending(m_display);
+void LockApp::setup_lock_screens() {
+    auto outputs = miqu::OutputManager::get()->get_outputs();
 
-        // Timer Tick (1-second for clock, 16ms for shake animation)
-        if (timer_idx >= 0 && (pfd[timer_idx].revents & POLLIN)) {
-            uint64_t expirations = 0;
-            read(m_timer_fd, &expirations, sizeof(expirations));
+    for (const auto& out : outputs) {
+        auto instance = std::make_shared<ScreenLockInstance>();
+        auto view = create_lock_view(instance);
 
-            if (m_auth_failed) {
-                auto now = std::chrono::steady_clock::now();
-                double elapsed_sec = std::chrono::duration<double>(now - m_fail_time).count();
-                if (elapsed_sec > 1.5) {
-                    m_auth_failed = false;
-                    set_timer_interval_ms(1000); // Revert to 1s ticks
+        instance->window = miqu::WindowBuilder::create()
+            ->role(miqu::WindowRole::SessionLock)
+            ->output(out.wl_output)
+            ->contentView(view)
+            ->keyboardInteractive(true)
+            ->onKey([this, instance](const miqu::KeyPressEvent& event) {
+                if (event.pressed) {
+                    bool caps = (event.modifiers & static_cast<uint32_t>(miqu::KeyboardModifier::Caps)) != 0;
+                    update_caps_lock_state(caps);
+
+                    if (instance->password_input && !instance->password_input->is_focused()) {
+                        instance->password_input->set_focused(true);
+                        if (instance->window) instance->window->schedule_redraw();
+                    }
                 }
-                redraw_all();
-            } else {
-                redraw_all();
-            }
-        }
+            })
+            ->build();
 
-        // Signal Handling
-        if (signal_idx >= 0 && (pfd[signal_idx].revents & POLLIN)) {
-            struct signalfd_siginfo fdsi;
-            ssize_t s = read(m_signal_fd, &fdsi, sizeof(fdsi));
-            if (s == sizeof(fdsi)) {
-                if (fdsi.ssi_signo == SIGINT || fdsi.ssi_signo == SIGTERM) {
-                    m_running = false;
-                    break;
-                }
-            }
-        }
-
-        // Inotify config changes
-        if (inotify_idx >= 0 && (pfd[inotify_idx].revents & POLLIN)) {
-            handle_inotify();
+        if (instance->window) {
+            m_screens.push_back(instance);
         }
     }
+
+    update_time_strings();
+}
+
+void LockApp::update_caps_lock_state(bool caps_on) {
+    if (m_caps_lock_on == caps_on) return;
+    m_caps_lock_on = caps_on;
+
+    for (auto& s : m_screens) {
+        if (!s) continue;
+        if (s->caps_view) {
+            s->caps_view->set_visibility(m_caps_lock_on ? miqu::Visibility::Visible : miqu::Visibility::Gone);
+        }
+        if (s->window) {
+            s->window->schedule_redraw();
+        }
+    }
+}
+
+void LockApp::update_time_strings() {
+    const auto& cfg = Config::get();
+    std::time_t t = std::time(nullptr);
+    std::tm* tm = std::localtime(&t);
+    if (!tm) return;
+
+    char time_buf[64];
+    char date_buf[128];
+    std::strftime(time_buf, sizeof(time_buf), cfg.get_time_format().c_str(), tm);
+    std::strftime(date_buf, sizeof(date_buf), cfg.get_date_format().c_str(), tm);
+
+    for (auto& s : m_screens) {
+        if (!s) continue;
+        if (s->time_view) s->time_view->set_text(time_buf);
+        if (s->date_view) s->date_view->set_text(date_buf);
+        if (s->window) s->window->schedule_redraw();
+    }
+}
+
+void LockApp::verify_password(const std::string& password) {
+    if (m_auth->is_authenticating()) return;
+
+    const auto& cfg = Config::get();
+    const auto& c_pri = cfg.get_primary_color();
+    const auto& c_err = cfg.get_error_color();
+    miqu::Color primary_color = miqu::Color::rgba(c_pri.r, c_pri.g, c_pri.b, c_pri.a);
+    miqu::Color error_color = miqu::Color::rgba(c_err.r, c_err.g, c_err.b, c_err.a);
+
+    for (auto& s : m_screens) {
+        if (!s) continue;
+        if (s->status_view) {
+            s->status_view->set_text_color(primary_color);
+            s->status_view->set_text("Authenticating...");
+        }
+        if (s->window) s->window->schedule_redraw();
+    }
+
+    m_auth->authenticate_async(password, [this, error_color](bool success) {
+        if (!m_engine) return;
+        m_engine->post([this, success, error_color]() {
+            if (success) {
+                std::cout << "[miqulock] Authentication succeeded, unlocking session.\n";
+                m_engine->unlock_session();
+                quit();
+            } else {
+                std::cout << "[miqulock] Authentication failed.\n";
+                for (auto& s : m_screens) {
+                    if (!s) continue;
+                    if (s->status_view) {
+                        s->status_view->set_text_color(error_color);
+                        s->status_view->set_text("Authentication failed. Please try again.");
+                    }
+                    if (s->password_input) {
+                        s->password_input->clear();
+                        s->password_input->set_focused(true);
+                    }
+                    if (s->window) s->window->schedule_redraw();
+                }
+            }
+        });
+    });
 }
 
 void LockApp::quit() {
+    if (!m_running) return;
     m_running = false;
-}
 
-void LockApp::redraw_all() {
-    for (auto& s : m_surfaces) {
-        s->render();
+    if (m_timer_thread.joinable()) {
+        m_timer_thread.join();
+    }
+
+    for (auto& s : m_screens) {
+        if (s && s->window) {
+            s->window->close();
+        }
+    }
+    m_screens.clear();
+
+    if (m_engine) {
+        m_engine->quit(0);
     }
 }
 
-void LockApp::trigger_auth() {
-    if (m_password.empty() || is_verifying()) return;
-
-    m_auth->authenticate_async(m_password, [this](bool success) {
-        if (success) {
-            std::cout << "[miqulock] Authentication successful! Unlocking session." << std::endl;
-            clear_password();
-            ext_session_lock_v1_unlock_and_destroy(m_lock);
-            m_lock = nullptr;
-            m_running = false;
-            wl_display_flush(m_display);
-        } else {
-            std::cout << "[miqulock] Authentication failed." << std::endl;
-            clear_password();
-            m_auth_failed = true;
-            m_fail_time = std::chrono::steady_clock::now();
-            set_timer_interval_ms(16); // 60fps for shake animation
-            redraw_all();
-        }
-    });
-    redraw_all();
-}
-
-void LockApp::on_key(uint32_t keycode, uint32_t state) {
-    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !m_xkb_state) return;
-    if (is_verifying()) return;
-
-    xkb_keysym_t sym = xkb_state_key_get_one_sym(m_xkb_state, keycode + 8);
-
-    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
-        trigger_auth();
-    } else if (sym == XKB_KEY_BackSpace) {
-        if (!m_password.empty()) {
-            m_password.pop_back();
-            m_auth_failed = false;
-            redraw_all();
-        }
-    } else if (sym == XKB_KEY_Escape) {
-        clear_password();
-        m_auth_failed = false;
-        redraw_all();
-    } else {
-        char buf[32];
-        int len = xkb_state_key_get_utf8(m_xkb_state, keycode + 8, buf, sizeof(buf));
-        if (len > 0 && static_cast<unsigned char>(buf[0]) >= 32) {
-            m_password.append(buf, len);
-            m_auth_failed = false;
-            redraw_all();
-        }
-    }
+void LockApp::run() {
+    if (!m_engine) return;
+    m_engine->enter_loop();
 }
 
 } // namespace miqulock

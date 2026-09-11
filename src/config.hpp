@@ -44,6 +44,7 @@ private:
     void set_defaults();
     void load_file(const std::string& path, int depth = 0);
     std::string resolve_path(const std::string& path) const;
+    void sync_toolkit_config();
 
     std::string m_config_path;
 

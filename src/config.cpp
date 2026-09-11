@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include <miqutoolkit/core/config.hpp>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -146,35 +147,23 @@ std::string Config::get_user_config_path() {
 }
 
 std::string Config::ensure_user_config() {
-    std::string user_conf = get_user_config_path();
-    if (user_conf.empty()) return "";
+    return miqu::Config::ensure_user_config("miqulock", "miqulock.conf");
+}
 
-    if (fs::exists(user_conf)) {
-        return user_conf;
-    }
-
-    fs::path user_path(user_conf);
-    std::error_code ec;
-    fs::create_directories(user_path.parent_path(), ec);
-
-    std::vector<std::string> defaults = {
-        "/usr/share/miqulock/miqulock.conf",
-        "assets/miqulock.conf",
-        "/usr/local/share/miqulock/miqulock.conf"
-    };
-
-    for (const auto& cand : defaults) {
-        if (fs::exists(cand)) {
-            fs::copy_file(cand, user_conf, fs::copy_options::overwrite_existing, ec);
-            if (!ec) {
-                std::cout << "[miqulock] Initialized user configuration: copied default to " 
-                          << user_conf << "\n";
-                return user_conf;
-            }
-        }
-    }
-
-    return user_conf;
+void Config::sync_toolkit_config() {
+    auto m_cfg = miqu::Config::get();
+    if (!m_cfg) return;
+    m_cfg->colors.primary = miqu::Color::rgba(m_primary.r, m_primary.g, m_primary.b, m_primary.a);
+    m_cfg->colors.on_primary = miqu::Color::rgba(m_on_primary.r, m_on_primary.g, m_on_primary.b, m_on_primary.a);
+    m_cfg->colors.primary_container = miqu::Color::rgba(m_primary_container.r, m_primary_container.g, m_primary_container.b, m_primary_container.a);
+    m_cfg->colors.background = miqu::Color::rgba(m_background.r, m_background.g, m_background.b, m_background.a);
+    m_cfg->colors.surface = miqu::Color::rgba(m_surface.r, m_surface.g, m_surface.b, m_surface.a);
+    m_cfg->colors.surface_variant = miqu::Color::rgba(m_surface.r * 0.75, m_surface.g * 0.75, m_surface.b * 0.75, 0.95);
+    m_cfg->colors.on_surface = miqu::Color::rgba(m_on_surface.r, m_on_surface.g, m_on_surface.b, m_on_surface.a);
+    m_cfg->colors.on_surface_variant = miqu::Color::rgba(m_on_surface.r, m_on_surface.g, m_on_surface.b, 0.60);
+    m_cfg->colors.outline = miqu::Color::rgba(m_outline.r, m_outline.g, m_outline.b, m_outline.a);
+    m_cfg->metrics.corner_radius = m_corner_radius;
+    m_cfg->metrics.font_family = m_font_family;
 }
 
 void Config::load(const std::string& custom_path) {
@@ -183,6 +172,7 @@ void Config::load(const std::string& custom_path) {
     if (!custom_path.empty() && fs::exists(custom_path)) {
         m_config_path = custom_path;
         load_file(m_config_path);
+        sync_toolkit_config();
         return;
     }
 
@@ -197,12 +187,15 @@ void Config::load(const std::string& custom_path) {
         m_config_path = "assets/miqulock.conf";
         load_file(m_config_path);
     }
+
+    sync_toolkit_config();
 }
 
 void Config::reload() {
     if (!m_config_path.empty() && fs::exists(m_config_path)) {
         set_defaults();
         load_file(m_config_path);
+        sync_toolkit_config();
         std::cout << "[miqulock] Configuration reloaded live from " << m_config_path << "\n";
     }
 }
