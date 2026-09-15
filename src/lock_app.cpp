@@ -70,21 +70,13 @@ bool LockApp::init() {
 
 std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLockInstance> instance) {
     const auto& cfg = Config::get();
-    const auto& c_bg = cfg.get_background_color();
-    const auto& c_pri = cfg.get_primary_color();
-    const auto& c_on_pri = cfg.get_on_primary_color();
-    const auto& c_surf = cfg.get_surface_color();
-    const auto& c_on_surf = cfg.get_on_surface_color();
-    const auto& c_outline = cfg.get_outline_color();
-    const auto& c_err = cfg.get_error_color();
-
-    miqu::Color bg_color = miqu::Color::rgba(c_bg.r, c_bg.g, c_bg.b, c_bg.a);
-    miqu::Color primary_color = miqu::Color::rgba(c_pri.r, c_pri.g, c_pri.b, c_pri.a);
-    miqu::Color on_primary_color = miqu::Color::rgba(c_on_pri.r, c_on_pri.g, c_on_pri.b, c_on_pri.a);
-    miqu::Color surface_color = miqu::Color::rgba(c_surf.r, c_surf.g, c_surf.b, c_surf.a);
-    miqu::Color on_surface_color = miqu::Color::rgba(c_on_surf.r, c_on_surf.g, c_on_surf.b, c_on_surf.a);
-    miqu::Color outline_color = miqu::Color::rgba(c_outline.r, c_outline.g, c_outline.b, c_outline.a);
-    miqu::Color error_color = miqu::Color::rgba(c_err.r, c_err.g, c_err.b, c_err.a);
+    const auto& bg_color = cfg.get_background_color();
+    const auto& primary_color = cfg.get_primary_color();
+    const auto& on_primary_color = cfg.get_on_primary_color();
+    const auto& surface_color = cfg.get_surface_color();
+    const auto& on_surface_color = cfg.get_on_surface_color();
+    const auto& outline_color = cfg.get_outline_color();
+    const auto& error_color = cfg.get_error_color();
 
     // 1. Time View (large, prominent digital clock)
     instance->time_view = miqu::TextViewBuilder::create()
@@ -321,10 +313,8 @@ void LockApp::verify_password(const std::string& password) {
     if (m_auth->is_authenticating()) return;
 
     const auto& cfg = Config::get();
-    const auto& c_pri = cfg.get_primary_color();
-    const auto& c_err = cfg.get_error_color();
-    miqu::Color primary_color = miqu::Color::rgba(c_pri.r, c_pri.g, c_pri.b, c_pri.a);
-    miqu::Color error_color = miqu::Color::rgba(c_err.r, c_err.g, c_err.b, c_err.a);
+    const auto& primary_color = cfg.get_primary_color();
+    const auto& error_color = cfg.get_error_color();
 
     for (auto& s : m_screens) {
         if (!s) continue;

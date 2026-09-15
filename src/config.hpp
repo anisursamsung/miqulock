@@ -1,16 +1,12 @@
 #pragma once
 
+#include <miqutoolkit/core/color.hpp>
 #include <string>
 #include <cstdint>
 
 namespace miqulock {
 
-struct Color {
-    double r = 0.0;
-    double g = 0.0;
-    double b = 0.0;
-    double a = 1.0;
-};
+using Color = miqu::Color;
 
 class Config {
 public:

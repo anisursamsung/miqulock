@@ -20,28 +20,16 @@ static std::string trim(const std::string& str) {
 }
 
 bool Config::parse_hex_color(const std::string& hex, Color& out_color) {
+    Color parsed = Color::from_hex(hex, Color::transparent());
+    if (parsed.a > 0.0f) {
+        out_color = parsed;
+        return true;
+    }
     std::string s = trim(hex);
-    if (s.empty()) return false;
-    if (s[0] == '#') s = s.substr(1);
-
-    uint32_t val = 0;
-    try {
-        if (s.length() == 6) {
-            val = std::stoul(s, nullptr, 16);
-            out_color.r = ((val >> 16) & 0xFF) / 255.0;
-            out_color.g = ((val >> 8) & 0xFF) / 255.0;
-            out_color.b = (val & 0xFF) / 255.0;
-            out_color.a = 1.0;
-            return true;
-        } else if (s.length() == 8) {
-            val = std::stoul(s, nullptr, 16);
-            out_color.r = ((val >> 24) & 0xFF) / 255.0;
-            out_color.g = ((val >> 16) & 0xFF) / 255.0;
-            out_color.b = ((val >> 8) & 0xFF) / 255.0;
-            out_color.a = (val & 0xFF) / 255.0;
-            return true;
-        }
-    } catch (...) {}
+    if (!s.empty() && (s == "#000" || s == "#000000" || s == "000000" || s == "#000000ff")) {
+        out_color = Color(0.0f, 0.0f, 0.0f, 1.0f);
+        return true;
+    }
     return false;
 }
 
@@ -56,16 +44,30 @@ Config::Config() {
 }
 
 void Config::set_defaults() {
-    parse_hex_color("#0066ff", m_primary);
-    parse_hex_color("#ffffff", m_on_primary);
-    parse_hex_color("#cce5ff", m_primary_container);
-    parse_hex_color("#0b0f19", m_background);
-    parse_hex_color("#161f30", m_surface);
-    parse_hex_color("#f8fafc", m_on_surface);
-    parse_hex_color("#3b82f6", m_outline);
-    parse_hex_color("#ef4444", m_error);
-    m_corner_radius = 24;
-    m_font_family = "Sans";
+    auto t_cfg = miqu::Config::get();
+    if (t_cfg) {
+        m_primary = t_cfg->colors.primary;
+        m_on_primary = t_cfg->colors.on_primary;
+        m_primary_container = t_cfg->colors.primary_container;
+        m_background = t_cfg->colors.background;
+        m_surface = t_cfg->colors.surface;
+        m_on_surface = t_cfg->colors.on_surface;
+        m_outline = t_cfg->colors.outline;
+        m_error = Color::from_hex("#ef4444");
+        m_corner_radius = (t_cfg->metrics.corner_radius > 0) ? (t_cfg->metrics.corner_radius + 12) : 24;
+        m_font_family = !t_cfg->metrics.font_family.empty() ? t_cfg->metrics.font_family : "Sans";
+    } else {
+        m_primary = Color::from_hex("#6366f1");
+        m_on_primary = Color::from_hex("#ffffff");
+        m_primary_container = Color::from_hex("#e0e7ff");
+        m_background = Color::from_hex("#f7f7fc");
+        m_surface = Color::from_hex("#ffffff");
+        m_on_surface = Color::from_hex("#1a1a2e");
+        m_outline = Color::from_hex("#d5d8ea");
+        m_error = Color::from_hex("#ef4444");
+        m_corner_radius = 24;
+        m_font_family = "Sans";
+    }
     m_time_format = "%H:%M";
     m_date_format = "%A, %B %d";
 }
@@ -153,15 +155,15 @@ std::string Config::ensure_user_config() {
 void Config::sync_toolkit_config() {
     auto m_cfg = miqu::Config::get();
     if (!m_cfg) return;
-    m_cfg->colors.primary = miqu::Color::rgba(m_primary.r, m_primary.g, m_primary.b, m_primary.a);
-    m_cfg->colors.on_primary = miqu::Color::rgba(m_on_primary.r, m_on_primary.g, m_on_primary.b, m_on_primary.a);
-    m_cfg->colors.primary_container = miqu::Color::rgba(m_primary_container.r, m_primary_container.g, m_primary_container.b, m_primary_container.a);
-    m_cfg->colors.background = miqu::Color::rgba(m_background.r, m_background.g, m_background.b, m_background.a);
-    m_cfg->colors.surface = miqu::Color::rgba(m_surface.r, m_surface.g, m_surface.b, m_surface.a);
-    m_cfg->colors.surface_variant = miqu::Color::rgba(m_surface.r * 0.75, m_surface.g * 0.75, m_surface.b * 0.75, 0.95);
-    m_cfg->colors.on_surface = miqu::Color::rgba(m_on_surface.r, m_on_surface.g, m_on_surface.b, m_on_surface.a);
-    m_cfg->colors.on_surface_variant = miqu::Color::rgba(m_on_surface.r, m_on_surface.g, m_on_surface.b, 0.60);
-    m_cfg->colors.outline = miqu::Color::rgba(m_outline.r, m_outline.g, m_outline.b, m_outline.a);
+    m_cfg->colors.primary = m_primary;
+    m_cfg->colors.on_primary = m_on_primary;
+    m_cfg->colors.primary_container = m_primary_container;
+    m_cfg->colors.background = m_background;
+    m_cfg->colors.surface = m_surface;
+    m_cfg->colors.surface_variant = m_surface.darken(0.12f);
+    m_cfg->colors.on_surface = m_on_surface;
+    m_cfg->colors.on_surface_variant = m_on_surface.with_alpha(0.60f);
+    m_cfg->colors.outline = m_outline;
     m_cfg->metrics.corner_radius = m_corner_radius;
     m_cfg->metrics.font_family = m_font_family;
 }
