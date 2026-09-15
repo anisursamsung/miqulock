@@ -43,6 +43,14 @@ bool LockApp::init() {
 
     setup_lock_screens();
 
+    miqu::OutputManager::get()->on_outputs_changed([this]() {
+        if (m_running && m_engine && m_engine->is_session_locked()) {
+            m_engine->post([this]() {
+                sync_lock_screens();
+            });
+        }
+    });
+
     // Roundtrip to process the configure and lock events
     while (!locked && m_engine->is_session_locked()) {
         if (wl_display_dispatch(m_engine->get_display()) < 0) {
@@ -243,10 +251,46 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
 }
 
 void LockApp::setup_lock_screens() {
+    sync_lock_screens();
+}
+
+void LockApp::sync_lock_screens() {
     auto outputs = miqu::OutputManager::get()->get_outputs();
 
+    // 1. Prune disconnected outputs
+    auto it = m_screens.begin();
+    while (it != m_screens.end()) {
+        auto& screen = *it;
+        bool still_present = false;
+        for (const auto& out : outputs) {
+            if (out.wl_output == screen->output) {
+                still_present = true;
+                break;
+            }
+        }
+        if (!still_present) {
+            if (screen->window) {
+                screen->window->close();
+            }
+            it = m_screens.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // 2. Spawn lock screen instance for any newly connected output
     for (const auto& out : outputs) {
+        bool already_present = false;
+        for (const auto& screen : m_screens) {
+            if (screen->output == out.wl_output) {
+                already_present = true;
+                break;
+            }
+        }
+        if (already_present) continue;
+
         auto instance = std::make_shared<ScreenLockInstance>();
+        instance->output = out.wl_output;
         auto view = create_lock_view(instance);
 
         instance->window = miqu::WindowBuilder::create()

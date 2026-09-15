@@ -12,6 +12,7 @@ namespace miqulock {
 class AuthManager;
 
 struct ScreenLockInstance {
+    struct wl_output* output = nullptr;
     std::shared_ptr<miqu::Window> window;
     std::shared_ptr<miqu::TextView> time_view;
     std::shared_ptr<miqu::TextView> date_view;
@@ -31,6 +32,7 @@ public:
 
 private:
     void setup_lock_screens();
+    void sync_lock_screens();
     std::shared_ptr<miqu::View> create_lock_view(std::shared_ptr<ScreenLockInstance> instance);
     void update_time_strings();
     void update_caps_lock_state(bool caps_on);
