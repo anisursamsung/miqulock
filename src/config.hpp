@@ -28,6 +28,7 @@ public:
     const Color& get_outline_color() const { return m_outline; }
     const Color& get_error_color() const { return m_error; }
 
+    bool show_power_actions() const { return m_show_power_actions; }
     int get_corner_radius() const { return m_corner_radius; }
     const std::string& get_font_family() const { return m_font_family; }
     const std::string& get_time_format() const { return m_time_format; }
@@ -53,6 +54,7 @@ private:
     Color m_outline;
     Color m_error;
 
+    bool m_show_power_actions = true;
     int m_corner_radius = 24;
     std::string m_font_family = "Sans";
     std::string m_time_format = "%H:%M";

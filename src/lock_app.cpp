@@ -5,6 +5,8 @@
 #include <ctime>
 #include <chrono>
 #include <cctype>
+#include <unistd.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 namespace miqulock {
 
@@ -86,27 +88,27 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
     const auto& outline_color = cfg.get_outline_color();
     const auto& error_color = cfg.get_error_color();
 
-    // 1. Time View (large, prominent digital clock)
+    // 1. Clock & Date (prominent typography & spacious margins)
     instance->time_view = miqu::TextViewBuilder::create()
         ->text("00:00")
         ->fontFamily(cfg.get_font_family())
-        ->textSize(76)
+        ->textSize(72)
         ->bold(true)
         ->textColor(on_surface_color)
         ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 0, 0, 4)
         ->build();
 
-    // 2. Date View (subtle, clean date string)
     instance->date_view = miqu::TextViewBuilder::create()
         ->text("Loading date...")
         ->fontFamily(cfg.get_font_family())
-        ->textSize(16)
+        ->textSize(15)
         ->textColor(on_surface_color.with_alpha(0.70f))
         ->textAlignment(miqu::TextAlignment::Center)
-        ->margin(0, 4, 0, 24)
+        ->margin(0, 0, 0, 28)
         ->build();
 
-    // 3. User Avatar & Identity
+    // 2. User Avatar & Details
     std::string username = m_auth->get_current_username();
     std::string initial = username.empty() ? "U" : username.substr(0, 1);
     for (auto& c : initial) c = static_cast<char>(std::toupper(c));
@@ -114,19 +116,19 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
     auto initial_text = miqu::TextViewBuilder::create()
         ->text(initial)
         ->fontFamily(cfg.get_font_family())
-        ->textSize(22)
+        ->textSize(24)
         ->bold(true)
         ->textColor(primary_color)
         ->textAlignment(miqu::TextAlignment::Center)
         ->build();
 
     auto avatar_badge = miqu::CardViewBuilder::create()
-        ->backgroundColor(primary_color.with_alpha(0.15f))
-        ->stroke(2, primary_color)
-        ->cornerRadius(28)
+        ->backgroundColor(primary_color.with_alpha(0.12f))
+        ->stroke(2, primary_color.with_alpha(0.75f))
+        ->cornerRadius(30)
         ->padding(0)
-        ->addView(initial_text, miqu::LayoutParams(56, 56, miqu::Gravity::Center))
-        ->margin(0, 0, 0, 10)
+        ->addView(initial_text, miqu::LayoutParams(60, 60, miqu::Gravity::Center))
+        ->margin(0, 0, 0, 12)
         ->build();
 
     auto username_view = miqu::TextViewBuilder::create()
@@ -136,6 +138,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->bold(true)
         ->textColor(on_surface_color)
         ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 0, 0, 2)
         ->build();
 
     auto subtitle_view = miqu::TextViewBuilder::create()
@@ -144,19 +147,18 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->textSize(12)
         ->textColor(on_surface_color.with_alpha(0.50f))
         ->textAlignment(miqu::TextAlignment::Center)
-        ->margin(0, 2, 0, 18)
+        ->margin(0, 0, 0, 20)
         ->build();
 
-    // 4. Password Input & Submit Button Row
+    // 3. Password Input Row
     instance->password_input = miqu::EditTextBuilder::create()
-        ->hint("Enter password...")
+        ->hint("Password...")
         ->passwordMode(true)
-        ->padding(16, 10)
+        ->padding(16, 12)
         ->onSubmit([this](const std::string& pwd) {
             verify_password(pwd);
         })
         ->build();
-
     instance->password_input->set_focused(true);
 
     auto submit_btn = miqu::ButtonBuilder::create()
@@ -164,7 +166,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->bold(true)
         ->textSize(16)
         ->cornerRadius(22)
-        ->padding(10, 8)
+        ->padding(0)
         ->onClick([this, instance]() {
             if (instance && instance->password_input) {
                 verify_password(instance->password_input->get_text());
@@ -179,75 +181,147 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->spacing(8)
         ->addView(instance->password_input, miqu::LayoutParams(1.0f))
         ->addView(submit_btn, miqu::LayoutParams(44, 44))
-        ->margin(0, 0, 0, 10)
+        ->margin(0, 0, 0, 8)
         ->build();
 
-    // 5. Status / Error View
+    // 4. Caps Lock Pill
+    instance->caps_view = miqu::TextViewBuilder::create()
+        ->text("⇪ CAPS LOCK IS ON")
+        ->fontFamily(cfg.get_font_family())
+        ->textSize(11)
+        ->bold(true)
+        ->textColor(error_color)
+        ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 2, 0, 6)
+        ->build();
+    instance->caps_view->set_visibility(m_caps_lock_on ? miqu::Visibility::Visible : miqu::Visibility::Gone);
+
+    // 5. Status / Hint View
     instance->status_view = miqu::TextViewBuilder::create()
         ->text("Press Enter to unlock")
         ->fontFamily(cfg.get_font_family())
         ->textSize(13)
         ->textColor(on_surface_color.with_alpha(0.55f))
         ->textAlignment(miqu::TextAlignment::Center)
+        ->margin(0, 2, 0, 0)
         ->build();
 
-    // 6. Caps Lock Warning View
-    instance->caps_view = miqu::TextViewBuilder::create()
-        ->text("CAPS LOCK IS ON")
-        ->fontFamily(cfg.get_font_family())
-        ->textSize(11)
-        ->bold(true)
-        ->textColor(error_color)
-        ->textAlignment(miqu::TextAlignment::Center)
-        ->margin(0, 4, 0, 0)
-        ->build();
-    instance->caps_view->set_visibility(m_caps_lock_on ? miqu::Visibility::Visible : miqu::Visibility::Gone);
-
-    // Assemble Auth Column inside the Card
+    // 6. Auth Column inside Card (using WrapContent throughout to prevent any clipping)
     auto auth_column = miqu::LinearLayoutBuilder::create()
         ->orientation(miqu::Orientation::Vertical)
         ->gravity(miqu::Gravity::CenterHorizontal)
-        ->addView(avatar_badge, miqu::LayoutParams(56, 56, miqu::Gravity::CenterHorizontal))
-        ->addView(username_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 22, miqu::Gravity::CenterHorizontal))
-        ->addView(subtitle_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 16, miqu::Gravity::CenterHorizontal))
-        ->addView(input_row, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 44))
-        ->addView(instance->status_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 18, miqu::Gravity::CenterHorizontal))
-        ->addView(instance->caps_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 16, miqu::Gravity::CenterHorizontal))
+        ->addView(avatar_badge, miqu::LayoutParams(60, 60, miqu::Gravity::CenterHorizontal))
+        ->addView(username_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
+        ->addView(subtitle_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
+        ->addView(input_row, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 46))
+        ->addView(instance->caps_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
+        ->addView(instance->status_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
         ->build();
 
-    // Elevated Floating Auth Card
+    // 7. Elevated Floating Auth Card
     auto auth_card = miqu::CardViewBuilder::create()
         ->backgroundColor(surface_color.with_alpha(0.90f))
         ->stroke(1, outline_color.with_alpha(0.35f))
         ->cornerRadius(cfg.get_corner_radius())
-        ->padding(26, 24, 26, 20)
+        ->padding(30, 26, 30, 22)
         ->addView(auth_column, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent)))
         ->build();
 
-    // Center Column (Clock + Date + Auth Card)
+    // 8. Center Column (Clock + Date + Auth Card)
     auto center_column = miqu::LinearLayoutBuilder::create()
         ->orientation(miqu::Orientation::Vertical)
         ->gravity(miqu::Gravity::CenterHorizontal)
-        ->addView(instance->time_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 80, miqu::Gravity::CenterHorizontal))
-        ->addView(instance->date_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), 26, miqu::Gravity::CenterHorizontal))
-        ->addView(auth_card, miqu::LayoutParams(380, 276, miqu::Gravity::CenterHorizontal))
+        ->addView(instance->time_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
+        ->addView(instance->date_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
+        ->addView(auth_card, miqu::LayoutParams(380, static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
         ->build();
 
-    // Root Fullscreen Card with Background Color and perfectly centered column
-    auto root_card = miqu::CardViewBuilder::create()
+    // 9. Root FrameLayout covering screen
+    auto root_frame = miqu::FrameLayoutBuilder::create()
         ->backgroundColor(bg_color)
-        ->cornerRadius(0)
-        ->addView(center_column, miqu::LayoutParams(380, 420, miqu::Gravity::Center))
         ->build();
 
-    root_card->set_on_click_listener([instance]() {
+    // 10. Power Actions Bar (Top-Right)
+    if (cfg.show_power_actions()) {
+        auto power_bar = miqu::LinearLayoutBuilder::create()
+            ->orientation(miqu::Orientation::Horizontal)
+            ->gravity(miqu::Gravity::CenterVertical)
+            ->spacing(8)
+            ->margin(0, 24, 28, 0)
+            ->build();
+
+        auto sleep_btn = miqu::ButtonBuilder::create()
+            ->text("💤")
+            ->flat(true)
+            ->padding(10, 6)
+            ->textSize(14)
+            ->cornerRadius(14)
+            ->onClick([this]() { handle_power_action("suspend"); })
+            ->build();
+
+        auto reboot_btn = miqu::ButtonBuilder::create()
+            ->text("🔄")
+            ->flat(true)
+            ->padding(10, 6)
+            ->textSize(14)
+            ->cornerRadius(14)
+            ->onClick([this]() { handle_power_action("reboot"); })
+            ->build();
+
+        auto shutdown_btn = miqu::ButtonBuilder::create()
+            ->text("⏻")
+            ->flat(true)
+            ->padding(10, 6)
+            ->textSize(14)
+            ->cornerRadius(14)
+            ->onClick([this]() { handle_power_action("poweroff"); })
+            ->build();
+
+        power_bar->add_view(sleep_btn);
+        power_bar->add_view(reboot_btn);
+        power_bar->add_view(shutdown_btn);
+
+        root_frame->add_view(power_bar, miqu::LayoutParams(
+            static_cast<int>(miqu::LayoutDimension::WrapContent),
+            static_cast<int>(miqu::LayoutDimension::WrapContent),
+            miqu::Gravity::Right | miqu::Gravity::Top
+        ));
+    }
+
+    // Add Center Column to root frame
+    root_frame->add_view(center_column, miqu::LayoutParams(
+        380,
+        static_cast<int>(miqu::LayoutDimension::WrapContent),
+        miqu::Gravity::Center
+    ));
+
+    root_frame->set_on_click_listener([instance]() {
         if (instance && instance->password_input) {
             instance->password_input->set_focused(true);
             if (instance->window) instance->window->schedule_redraw();
         }
     });
 
-    return root_card;
+    return root_frame;
+}
+
+void LockApp::handle_power_action(const std::string& action) {
+    if (action == "suspend") {
+        if (fork() == 0) {
+            execlp("systemctl", "systemctl", "suspend", nullptr);
+            _exit(1);
+        }
+    } else if (action == "reboot") {
+        if (fork() == 0) {
+            execlp("systemctl", "systemctl", "reboot", nullptr);
+            _exit(1);
+        }
+    } else if (action == "poweroff") {
+        if (fork() == 0) {
+            execlp("systemctl", "systemctl", "poweroff", nullptr);
+            _exit(1);
+        }
+    }
 }
 
 void LockApp::setup_lock_screens() {
@@ -303,7 +377,12 @@ void LockApp::sync_lock_screens() {
                     bool caps = (event.modifiers & static_cast<uint32_t>(miqu::KeyboardModifier::Caps)) != 0;
                     update_caps_lock_state(caps);
 
-                    if (instance->password_input && !instance->password_input->is_focused()) {
+                    if (event.keysym == XKB_KEY_Escape) {
+                        if (instance->password_input) {
+                            instance->password_input->clear();
+                            if (instance->window) instance->window->schedule_redraw();
+                        }
+                    } else if (instance->password_input && !instance->password_input->is_focused()) {
                         instance->password_input->set_focused(true);
                         if (instance->window) instance->window->schedule_redraw();
                     }

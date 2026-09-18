@@ -37,6 +37,7 @@ private:
     void update_time_strings();
     void update_caps_lock_state(bool caps_on);
     void verify_password(const std::string& password);
+    void handle_power_action(const std::string& action);
 
     std::shared_ptr<miqu::AppEngine> m_engine;
     std::unique_ptr<AuthManager> m_auth;

@@ -68,6 +68,7 @@ void Config::set_defaults() {
         m_corner_radius = 24;
         m_font_family = "Sans";
     }
+    m_show_power_actions = true;
     m_time_format = "%H:%M";
     m_date_format = "%A, %B %d";
 }
@@ -126,6 +127,10 @@ void Config::load_file(const std::string& path, int depth) {
             try {
                 m_corner_radius = std::max(0, std::stoi(value));
             } catch (...) {}
+        } else if (key == "show_power_actions" || key == "power_actions") {
+            std::string v = value;
+            std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+            m_show_power_actions = (v == "true" || v == "1" || v == "yes" || v == "on");
         } else if (key == "font" || key == "font_family") {
             m_font_family = value;
         } else if (key == "time_format") {
