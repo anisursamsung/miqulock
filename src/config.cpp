@@ -174,32 +174,33 @@ void Config::sync_toolkit_config() {
 }
 
 void Config::load(const std::string& custom_path) {
-    set_defaults();
-
     if (!custom_path.empty() && fs::exists(custom_path)) {
         m_config_path = custom_path;
-        load_file(m_config_path);
-        sync_toolkit_config();
-        return;
+    } else {
+        std::string user_conf = ensure_user_config();
+        if (!user_conf.empty() && fs::exists(user_conf)) {
+            m_config_path = user_conf;
+        } else if (fs::exists("/usr/share/miqulock/miqulock.conf")) {
+            m_config_path = "/usr/share/miqulock/miqulock.conf";
+        } else if (fs::exists("assets/miqulock.conf")) {
+            m_config_path = "assets/miqulock.conf";
+        }
     }
 
-    std::string user_conf = ensure_user_config();
-    if (!user_conf.empty() && fs::exists(user_conf)) {
-        m_config_path = user_conf;
-        load_file(m_config_path);
-    } else if (fs::exists("/usr/share/miqulock/miqulock.conf")) {
-        m_config_path = "/usr/share/miqulock/miqulock.conf";
-        load_file(m_config_path);
-    } else if (fs::exists("assets/miqulock.conf")) {
-        m_config_path = "assets/miqulock.conf";
-        load_file(m_config_path);
+    if (!m_config_path.empty() && fs::exists(m_config_path)) {
+        miqu::Config::get()->load_from_file(m_config_path);
     }
 
+    set_defaults();
+    if (!m_config_path.empty() && fs::exists(m_config_path)) {
+        load_file(m_config_path);
+    }
     sync_toolkit_config();
 }
 
 void Config::reload() {
     if (!m_config_path.empty() && fs::exists(m_config_path)) {
+        miqu::Config::get()->load_from_file(m_config_path);
         set_defaults();
         load_file(m_config_path);
         sync_toolkit_config();
