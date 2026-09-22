@@ -71,6 +71,8 @@ void Config::set_defaults() {
     m_show_power_actions = true;
     m_time_format = "%H:%M";
     m_date_format = "%A, %B %d";
+    m_background_image = resolve_default_background();
+    m_background_scale = 0.90f;
 }
 
 std::string Config::resolve_path(const std::string& path) const {
@@ -82,6 +84,35 @@ std::string Config::resolve_path(const std::string& path) const {
         }
     }
     return path;
+}
+
+std::string Config::resolve_default_background() const {
+    std::string user_bg;
+    const char* xdg_config = getenv("XDG_CONFIG_HOME");
+    if (xdg_config && *xdg_config) {
+        user_bg = std::string(xdg_config) + "/miqulock/background.png";
+    } else {
+        const char* home = getenv("HOME");
+        if (home && *home) {
+            user_bg = std::string(home) + "/.config/miqulock/background.png";
+        }
+    }
+    if (!user_bg.empty() && fs::exists(user_bg)) {
+        return user_bg;
+    }
+
+    if (fs::exists("/usr/share/miqulock/background.png")) {
+        return "/usr/share/miqulock/background.png";
+    }
+
+    if (fs::exists("assets/background.png")) {
+        return "assets/background.png";
+    }
+    if (fs::exists("../assets/background.png")) {
+        return "../assets/background.png";
+    }
+
+    return "";
 }
 
 void Config::load_file(const std::string& path, int depth) {
@@ -131,6 +162,28 @@ void Config::load_file(const std::string& path, int depth) {
             std::string v = value;
             std::transform(v.begin(), v.end(), v.begin(), ::tolower);
             m_show_power_actions = (v == "true" || v == "1" || v == "yes" || v == "on");
+        } else if (key == "background_image" || key == "bg_image" || key == "image") {
+            if (value == "none" || value == "off" || value == "false" || value == "0") {
+                m_background_image = "";
+            } else {
+                std::string res_bg = resolve_path(value);
+                if (!res_bg.empty() && fs::exists(res_bg)) {
+                    m_background_image = res_bg;
+                } else if (!res_bg.empty()) {
+                    std::cerr << "[miqulock] Warning: configured background_image not found: " << res_bg << "\n";
+                    m_background_image = res_bg;
+                }
+            }
+        } else if (key == "background_scale" || key == "image_scale" || key == "bg_scale") {
+            try {
+                std::string v = value;
+                if (!v.empty() && v.back() == '%') v.pop_back();
+                float val = std::stof(v);
+                if (val > 1.0f && val <= 100.0f) {
+                    val = val / 100.0f;
+                }
+                m_background_scale = std::clamp(val, 0.1f, 1.0f);
+            } catch (...) {}
         } else if (key == "font" || key == "font_family") {
             m_font_family = value;
         } else if (key == "time_format") {
@@ -154,7 +207,7 @@ std::string Config::get_user_config_path() {
 }
 
 std::string Config::ensure_user_config() {
-    return miqu::Config::ensure_user_config("miqulock", "miqulock.conf");
+    return miqu::Config::ensure_user_config("miqulock", "miqulock.conf", {"background.png"});
 }
 
 void Config::sync_toolkit_config() {

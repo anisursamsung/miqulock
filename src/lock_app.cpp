@@ -5,6 +5,7 @@
 #include <ctime>
 #include <chrono>
 #include <cctype>
+#include <algorithm>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -88,17 +89,112 @@ LockApp::InitResult LockApp::init() {
     return InitResult::Success;
 }
 
-std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLockInstance> instance) {
-    const auto& cfg = Config::get();
-    const auto& bg_color = cfg.get_background_color();
-    const auto& primary_color = cfg.get_primary_color();
-    const auto& on_primary_color = cfg.get_on_primary_color();
-    const auto& surface_color = cfg.get_surface_color();
-    const auto& on_surface_color = cfg.get_on_surface_color();
-    const auto& outline_color = cfg.get_outline_color();
-    const auto& error_color = cfg.get_error_color();
+namespace {
 
-    // 1. Clock & Date (prominent typography & spacious margins)
+class ScaledImageView : public miqu::ImageView {
+public:
+    explicit ScaledImageView(std::string source) : miqu::ImageView(std::move(source)) {}
+
+    void set_scale_factor(float factor) {
+        m_scale_factor = std::clamp(factor, 0.1f, 1.0f);
+        request_redraw();
+    }
+    float get_scale_factor() const { return m_scale_factor; }
+
+    void draw(cairo_t* cr, const miqu::Rect& bounds) override {
+        if (m_scale_factor >= 0.999f) {
+            miqu::ImageView::draw(cr, bounds);
+            return;
+        }
+
+        int w = std::max(1, static_cast<int>(bounds.width * m_scale_factor));
+        int h = std::max(1, static_cast<int>(bounds.height * m_scale_factor));
+        int x = bounds.x + (bounds.width - w) / 2;
+        int y = bounds.y + (bounds.height - h) / 2;
+        miqu::Rect scaled_bounds(x, y, w, h);
+        set_bounds(scaled_bounds);
+        miqu::ImageView::draw(cr, scaled_bounds);
+    }
+
+private:
+    float m_scale_factor = 0.90f;
+};
+
+} // anonymous namespace
+
+std::shared_ptr<miqu::View> LockApp::create_background_view(std::shared_ptr<ScreenLockInstance> instance) {
+    const auto& cfg = Config::get();
+    const auto& bg_image_path = cfg.get_background_image();
+    if (bg_image_path.empty()) {
+        return nullptr;
+    }
+
+    auto bg_view = std::make_shared<ScaledImageView>(bg_image_path);
+    bg_view->set_fit_mode(miqu::FitMode::Cover);
+    bg_view->set_quality_mode(miqu::ImageQuality::FullOriginal);
+    bg_view->set_scale_factor(cfg.get_background_scale());
+
+    if (cfg.get_background_scale() < 0.999f) {
+        bg_view->set_corner_radius(cfg.get_corner_radius());
+        bg_view->set_border(1, cfg.get_outline_color().with_alpha(0.35f));
+    }
+
+    bg_view->set_on_click_listener([instance]() {
+        if (instance && instance->password_input) {
+            instance->password_input->set_focused(true);
+            if (instance->window) instance->window->schedule_redraw();
+        }
+    });
+
+    instance->background_view = bg_view;
+    return bg_view;
+}
+
+std::shared_ptr<miqu::View> LockApp::create_power_bar() {
+    auto power_bar = miqu::LinearLayoutBuilder::create()
+        ->orientation(miqu::Orientation::Horizontal)
+        ->gravity(miqu::Gravity::CenterVertical)
+        ->spacing(8)
+        ->margin(0, 24, 28, 0)
+        ->build();
+
+    auto sleep_btn = miqu::ButtonBuilder::create()
+        ->text("💤")
+        ->flat(true)
+        ->padding(10, 6)
+        ->textSize(14)
+        ->cornerRadius(14)
+        ->onClick([this]() { handle_power_action("suspend"); })
+        ->build();
+
+    auto reboot_btn = miqu::ButtonBuilder::create()
+        ->text("🔄")
+        ->flat(true)
+        ->padding(10, 6)
+        ->textSize(14)
+        ->cornerRadius(14)
+        ->onClick([this]() { handle_power_action("reboot"); })
+        ->build();
+
+    auto shutdown_btn = miqu::ButtonBuilder::create()
+        ->text("⏻")
+        ->flat(true)
+        ->padding(10, 6)
+        ->textSize(14)
+        ->cornerRadius(14)
+        ->onClick([this]() { handle_power_action("poweroff"); })
+        ->build();
+
+    power_bar->add_view(sleep_btn);
+    power_bar->add_view(reboot_btn);
+    power_bar->add_view(shutdown_btn);
+    return power_bar;
+}
+
+void LockApp::setup_clock_views(std::shared_ptr<ScreenLockInstance> instance) {
+    const auto& cfg = Config::get();
+    const auto& on_surface_color = cfg.get_on_surface_color();
+
     instance->time_view = miqu::TextViewBuilder::create()
         ->text("00:00")
         ->fontFamily(cfg.get_font_family())
@@ -117,8 +213,18 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->textAlignment(miqu::TextAlignment::Center)
         ->margin(0, 0, 0, 28)
         ->build();
+}
 
-    // 2. User Avatar & Details
+std::shared_ptr<miqu::View> LockApp::create_auth_card(std::shared_ptr<ScreenLockInstance> instance) {
+    const auto& cfg = Config::get();
+    const auto& primary_color = cfg.get_primary_color();
+    const auto& on_primary_color = cfg.get_on_primary_color();
+    const auto& surface_color = cfg.get_surface_color();
+    const auto& on_surface_color = cfg.get_on_surface_color();
+    const auto& outline_color = cfg.get_outline_color();
+    const auto& error_color = cfg.get_error_color();
+
+    // User Avatar Badge
     std::string username = m_auth->get_current_username();
     std::string initial = username.empty() ? "U" : username.substr(0, 1);
     for (auto& c : initial) c = static_cast<char>(std::toupper(c));
@@ -160,7 +266,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->margin(0, 0, 0, 20)
         ->build();
 
-    // 3. Password Input Row
+    // Password input row
     instance->password_input = miqu::EditTextBuilder::create()
         ->hint("Password...")
         ->passwordMode(true)
@@ -194,7 +300,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->margin(0, 0, 0, 8)
         ->build();
 
-    // 4. Caps Lock Pill
+    // Caps lock indicator
     instance->caps_view = miqu::TextViewBuilder::create()
         ->text("⇪ CAPS LOCK IS ON")
         ->fontFamily(cfg.get_font_family())
@@ -206,7 +312,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->build();
     instance->caps_view->set_visibility(m_caps_lock_on ? miqu::Visibility::Visible : miqu::Visibility::Gone);
 
-    // 5. Status / Hint View
+    // Status / hint
     instance->status_view = miqu::TextViewBuilder::create()
         ->text("Press Enter to unlock")
         ->fontFamily(cfg.get_font_family())
@@ -216,7 +322,6 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->margin(0, 2, 0, 0)
         ->build();
 
-    // 6. Auth Column inside Card (using WrapContent throughout to prevent any clipping)
     auto auth_column = miqu::LinearLayoutBuilder::create()
         ->orientation(miqu::Orientation::Vertical)
         ->gravity(miqu::Gravity::CenterHorizontal)
@@ -228,16 +333,45 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->addView(instance->status_view, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
         ->build();
 
-    // 7. Elevated Floating Auth Card
-    auto auth_card = miqu::CardViewBuilder::create()
+    return miqu::CardViewBuilder::create()
         ->backgroundColor(surface_color.with_alpha(0.90f))
         ->stroke(1, outline_color.with_alpha(0.35f))
         ->cornerRadius(cfg.get_corner_radius())
         ->padding(30, 26, 30, 22)
         ->addView(auth_column, miqu::LayoutParams(static_cast<int>(miqu::LayoutDimension::MatchParent), static_cast<int>(miqu::LayoutDimension::WrapContent)))
         ->build();
+}
 
-    // 8. Center Column (Clock + Date + Auth Card)
+std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLockInstance> instance) {
+    const auto& cfg = Config::get();
+
+    auto root_frame = miqu::FrameLayoutBuilder::create()
+        ->backgroundColor(cfg.get_background_color())
+        ->build();
+
+    // 1. Full-window Background ImageView
+    auto bg_view = create_background_view(instance);
+    if (bg_view) {
+        root_frame->add_view(bg_view, miqu::LayoutParams(
+            static_cast<int>(miqu::LayoutDimension::MatchParent),
+            static_cast<int>(miqu::LayoutDimension::MatchParent)
+        ));
+    }
+
+    // 2. Power Actions Bar (Top-Right)
+    if (cfg.show_power_actions()) {
+        auto power_bar = create_power_bar();
+        root_frame->add_view(power_bar, miqu::LayoutParams(
+            static_cast<int>(miqu::LayoutDimension::WrapContent),
+            static_cast<int>(miqu::LayoutDimension::WrapContent),
+            miqu::Gravity::Right | miqu::Gravity::Top
+        ));
+    }
+
+    // 3. Center Column (Clock + Date + Auth Card)
+    setup_clock_views(instance);
+    auto auth_card = create_auth_card(instance);
+
     auto center_column = miqu::LinearLayoutBuilder::create()
         ->orientation(miqu::Orientation::Vertical)
         ->gravity(miqu::Gravity::CenterHorizontal)
@@ -246,59 +380,6 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
         ->addView(auth_card, miqu::LayoutParams(380, static_cast<int>(miqu::LayoutDimension::WrapContent), miqu::Gravity::CenterHorizontal))
         ->build();
 
-    // 9. Root FrameLayout covering screen
-    auto root_frame = miqu::FrameLayoutBuilder::create()
-        ->backgroundColor(bg_color)
-        ->build();
-
-    // 10. Power Actions Bar (Top-Right)
-    if (cfg.show_power_actions()) {
-        auto power_bar = miqu::LinearLayoutBuilder::create()
-            ->orientation(miqu::Orientation::Horizontal)
-            ->gravity(miqu::Gravity::CenterVertical)
-            ->spacing(8)
-            ->margin(0, 24, 28, 0)
-            ->build();
-
-        auto sleep_btn = miqu::ButtonBuilder::create()
-            ->text("💤")
-            ->flat(true)
-            ->padding(10, 6)
-            ->textSize(14)
-            ->cornerRadius(14)
-            ->onClick([this]() { handle_power_action("suspend"); })
-            ->build();
-
-        auto reboot_btn = miqu::ButtonBuilder::create()
-            ->text("🔄")
-            ->flat(true)
-            ->padding(10, 6)
-            ->textSize(14)
-            ->cornerRadius(14)
-            ->onClick([this]() { handle_power_action("reboot"); })
-            ->build();
-
-        auto shutdown_btn = miqu::ButtonBuilder::create()
-            ->text("⏻")
-            ->flat(true)
-            ->padding(10, 6)
-            ->textSize(14)
-            ->cornerRadius(14)
-            ->onClick([this]() { handle_power_action("poweroff"); })
-            ->build();
-
-        power_bar->add_view(sleep_btn);
-        power_bar->add_view(reboot_btn);
-        power_bar->add_view(shutdown_btn);
-
-        root_frame->add_view(power_bar, miqu::LayoutParams(
-            static_cast<int>(miqu::LayoutDimension::WrapContent),
-            static_cast<int>(miqu::LayoutDimension::WrapContent),
-            miqu::Gravity::Right | miqu::Gravity::Top
-        ));
-    }
-
-    // Add Center Column to root frame
     root_frame->add_view(center_column, miqu::LayoutParams(
         380,
         static_cast<int>(miqu::LayoutDimension::WrapContent),
