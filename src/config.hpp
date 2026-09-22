@@ -35,6 +35,8 @@ public:
     const std::string& get_date_format() const { return m_date_format; }
     const std::string& get_background_path() const { return m_background_path; }
     const Color& get_bg_fill_color() const { return m_bg_fill_color; }
+    int get_blur_radius() const { return m_blur_radius; }
+    float get_dim_alpha() const { return m_dim_alpha; }
 
     static bool parse_hex_color(const std::string& hex, Color& out_color);
 
@@ -63,6 +65,8 @@ private:
     std::string m_date_format = "%A, %B %d";
     std::string m_background_path;
     Color m_bg_fill_color;
+    int m_blur_radius = 0;
+    float m_dim_alpha = 0.0f;
 };
 
 } // namespace miqulock

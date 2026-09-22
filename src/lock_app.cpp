@@ -91,16 +91,25 @@ LockApp::InitResult LockApp::init() {
 
 
 std::shared_ptr<miqu::View> LockApp::create_background_view(std::shared_ptr<ScreenLockInstance> instance) {
-    const auto& bg_path = Config::get().get_background_path();
+    const auto& cfg = Config::get();
+    const auto& bg_path = cfg.get_background_path();
     if (bg_path.empty()) {
         return nullptr;
     }
 
-    auto bg_view = miqu::ImageViewBuilder::create()
+    auto builder = miqu::ImageViewBuilder::create()
         ->source(bg_path)
         ->fitMode(miqu::FitMode::Cover)
-        ->qualityMode(miqu::ImageQuality::FullOriginal)
-        ->build();
+        ->qualityMode(miqu::ImageQuality::FullOriginal);
+
+    if (cfg.get_blur_radius() > 0) {
+        builder->blurRadius(cfg.get_blur_radius());
+    }
+    if (cfg.get_dim_alpha() > 0.001f) {
+        builder->dim(cfg.get_dim_alpha());
+    }
+
+    auto bg_view = builder->build();
 
     bg_view->set_on_click_listener([instance]() {
         if (instance && instance->password_input) {

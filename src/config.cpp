@@ -74,6 +74,8 @@ void Config::set_defaults() {
     m_date_format = "%A, %B %d";
     m_background_path = "";
     m_bg_fill_color = m_primary;
+    m_blur_radius = 0;
+    m_dim_alpha = 0.0f;
 }
 
 std::string Config::resolve_path(const std::string& path) const {
@@ -172,6 +174,14 @@ void Config::load_file(const std::string& path, int depth) {
             m_time_format = value;
         } else if (key == "date_format") {
             m_date_format = value;
+        } else if (key == "blur" || key == "blur_radius") {
+            try {
+                m_blur_radius = std::max(0, std::stoi(value));
+            } catch (...) {}
+        } else if (key == "dim" || key == "dim_alpha") {
+            try {
+                m_dim_alpha = std::clamp(std::stof(value), 0.0f, 1.0f);
+            } catch (...) {}
         }
     }
 }
