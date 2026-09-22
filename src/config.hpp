@@ -57,7 +57,7 @@ private:
     Color m_error;
 
     bool m_show_power_actions = true;
-    int m_corner_radius = 24;
+    int m_corner_radius = 12;
     std::string m_font_family = "Sans";
     std::string m_time_format = "%H:%M";
     std::string m_date_format = "%A, %B %d";

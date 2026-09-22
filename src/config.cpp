@@ -55,7 +55,7 @@ void Config::set_defaults() {
         m_on_surface = t_cfg->colors.on_surface;
         m_outline = t_cfg->colors.outline;
         m_error = Color::from_hex("#ef4444");
-        m_corner_radius = (t_cfg->metrics.corner_radius > 0) ? (t_cfg->metrics.corner_radius + 12) : 24;
+        m_corner_radius = t_cfg->metrics.corner_radius;
         m_font_family = !t_cfg->metrics.font_family.empty() ? t_cfg->metrics.font_family : "Sans";
     } else {
         m_primary = Color::from_hex("#6366f1");
@@ -66,7 +66,7 @@ void Config::set_defaults() {
         m_on_surface = Color::from_hex("#1a1a2e");
         m_outline = Color::from_hex("#d5d8ea");
         m_error = Color::from_hex("#ef4444");
-        m_corner_radius = 24;
+        m_corner_radius = 12;
         m_font_family = "Sans";
     }
     m_show_power_actions = true;

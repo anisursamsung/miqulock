@@ -19,6 +19,7 @@ struct ScreenLockInstance {
     std::shared_ptr<miqu::EditText> password_input;
     std::shared_ptr<miqu::TextView> status_view;
     std::shared_ptr<miqu::TextView> caps_view;
+    std::shared_ptr<miqu::PopupMenu> power_menu;
 };
 
 class LockApp {
@@ -41,7 +42,6 @@ private:
     void sync_lock_screens();
     std::shared_ptr<miqu::View> create_lock_view(std::shared_ptr<ScreenLockInstance> instance);
     std::shared_ptr<miqu::View> create_background_view(std::shared_ptr<ScreenLockInstance> instance);
-    std::shared_ptr<miqu::View> create_power_bar();
     void setup_clock_views(std::shared_ptr<ScreenLockInstance> instance);
     std::shared_ptr<miqu::View> create_auth_card(std::shared_ptr<ScreenLockInstance> instance);
     void update_time_strings();
