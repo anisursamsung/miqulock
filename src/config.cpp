@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <iostream>
 #include <vector>
+#include <set>
 
 namespace miqulock {
 
@@ -71,8 +72,8 @@ void Config::set_defaults() {
     m_show_power_actions = true;
     m_time_format = "%H:%M";
     m_date_format = "%A, %B %d";
-    m_background_image = resolve_default_background();
-    m_background_scale = 0.90f;
+    m_background_path = "";
+    m_bg_fill_color = m_primary;
 }
 
 std::string Config::resolve_path(const std::string& path) const {
@@ -86,34 +87,8 @@ std::string Config::resolve_path(const std::string& path) const {
     return path;
 }
 
-std::string Config::resolve_default_background() const {
-    std::string user_bg;
-    const char* xdg_config = getenv("XDG_CONFIG_HOME");
-    if (xdg_config && *xdg_config) {
-        user_bg = std::string(xdg_config) + "/miqulock/background.png";
-    } else {
-        const char* home = getenv("HOME");
-        if (home && *home) {
-            user_bg = std::string(home) + "/.config/miqulock/background.png";
-        }
-    }
-    if (!user_bg.empty() && fs::exists(user_bg)) {
-        return user_bg;
-    }
 
-    if (fs::exists("/usr/share/miqulock/background.png")) {
-        return "/usr/share/miqulock/background.png";
-    }
 
-    if (fs::exists("assets/background.png")) {
-        return "assets/background.png";
-    }
-    if (fs::exists("../assets/background.png")) {
-        return "../assets/background.png";
-    }
-
-    return "";
-}
 
 void Config::load_file(const std::string& path, int depth) {
     if (depth > 5) return;
@@ -144,7 +119,7 @@ void Config::load_file(const std::string& path, int depth) {
             parse_hex_color(value, m_on_primary);
         } else if (key == "color_primary_container" || key == "primary_container") {
             parse_hex_color(value, m_primary_container);
-        } else if (key == "color_background" || key == "background" || key == "bg_color") {
+        } else if (key == "color_background") {
             parse_hex_color(value, m_background);
         } else if (key == "color_surface" || key == "surface") {
             parse_hex_color(value, m_surface);
@@ -162,28 +137,35 @@ void Config::load_file(const std::string& path, int depth) {
             std::string v = value;
             std::transform(v.begin(), v.end(), v.begin(), ::tolower);
             m_show_power_actions = (v == "true" || v == "1" || v == "yes" || v == "on");
-        } else if (key == "background_image" || key == "bg_image" || key == "image") {
-            if (value == "none" || value == "off" || value == "false" || value == "0") {
-                m_background_image = "";
+        } else if (key == "background") {
+            // Accepts a hex color, an image path, or a pointer file (text file whose
+            // first line contains the real image path — e.g. ~/.config/theme/current/wallpaper).
+            std::string res = resolve_path(value);
+            std::error_code ec;
+            if (fs::exists(res, ec) && !fs::is_directory(res, ec)) {
+                static const std::set<std::string> img_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"};
+                std::string ext = fs::path(res).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (!img_exts.count(ext)) {
+                    std::ifstream pf(res);
+                    std::string forwarded;
+                    if (std::getline(pf, forwarded)) {
+                        forwarded = trim(forwarded);
+                        forwarded = resolve_path(forwarded);
+                        std::error_code ec2;
+                        if (!forwarded.empty() && fs::exists(forwarded, ec2) && !fs::is_directory(forwarded, ec2))
+                            res = forwarded;
+                    }
+                }
+                m_background_path = res;
             } else {
-                std::string res_bg = resolve_path(value);
-                if (!res_bg.empty() && fs::exists(res_bg)) {
-                    m_background_image = res_bg;
-                } else if (!res_bg.empty()) {
-                    std::cerr << "[miqulock] Warning: configured background_image not found: " << res_bg << "\n";
-                    m_background_image = res_bg;
+                Color c;
+                if (parse_hex_color(value, c)) {
+                    m_bg_fill_color = c;
+                } else {
+                    std::cerr << "[miqulock] Warning: 'background' value is neither a valid file nor a hex color: " << value << "\n";
                 }
             }
-        } else if (key == "background_scale" || key == "image_scale" || key == "bg_scale") {
-            try {
-                std::string v = value;
-                if (!v.empty() && v.back() == '%') v.pop_back();
-                float val = std::stof(v);
-                if (val > 1.0f && val <= 100.0f) {
-                    val = val / 100.0f;
-                }
-                m_background_scale = std::clamp(val, 0.1f, 1.0f);
-            } catch (...) {}
         } else if (key == "font" || key == "font_family") {
             m_font_family = value;
         } else if (key == "time_format") {
@@ -207,7 +189,7 @@ std::string Config::get_user_config_path() {
 }
 
 std::string Config::ensure_user_config() {
-    return miqu::Config::ensure_user_config("miqulock", "miqulock.conf", {"background.png"});
+    return miqu::Config::ensure_user_config("miqulock", "miqulock.conf");
 }
 
 void Config::sync_toolkit_config() {

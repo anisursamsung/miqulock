@@ -47,4 +47,4 @@ target_compile_options(miqulock PRIVATE
 
 include(GNUInstallDirs)
 install(TARGETS miqulock RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES assets/miqulock.conf assets/background.png DESTINATION ${CMAKE_INSTALL_DATADIR}/miqulock)
+install(FILES assets/miqulock.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/miqulock)

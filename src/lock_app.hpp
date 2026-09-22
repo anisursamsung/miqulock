@@ -14,7 +14,6 @@ class AuthManager;
 struct ScreenLockInstance {
     struct wl_output* output = nullptr;
     std::shared_ptr<miqu::Window> window;
-    std::shared_ptr<miqu::ImageView> background_view;
     std::shared_ptr<miqu::TextView> time_view;
     std::shared_ptr<miqu::TextView> date_view;
     std::shared_ptr<miqu::EditText> password_input;

@@ -33,8 +33,8 @@ public:
     const std::string& get_font_family() const { return m_font_family; }
     const std::string& get_time_format() const { return m_time_format; }
     const std::string& get_date_format() const { return m_date_format; }
-    const std::string& get_background_image() const { return m_background_image; }
-    float get_background_scale() const { return m_background_scale; }
+    const std::string& get_background_path() const { return m_background_path; }
+    const Color& get_bg_fill_color() const { return m_bg_fill_color; }
 
     static bool parse_hex_color(const std::string& hex, Color& out_color);
 
@@ -43,7 +43,6 @@ private:
     void set_defaults();
     void load_file(const std::string& path, int depth = 0);
     std::string resolve_path(const std::string& path) const;
-    std::string resolve_default_background() const;
     void sync_toolkit_config();
 
     std::string m_config_path;
@@ -62,8 +61,8 @@ private:
     std::string m_font_family = "Sans";
     std::string m_time_format = "%H:%M";
     std::string m_date_format = "%A, %B %d";
-    std::string m_background_image;
-    float m_background_scale = 0.90f;
+    std::string m_background_path;
+    Color m_bg_fill_color;
 };
 
 } // namespace miqulock

@@ -89,55 +89,18 @@ LockApp::InitResult LockApp::init() {
     return InitResult::Success;
 }
 
-namespace {
-
-class ScaledImageView : public miqu::ImageView {
-public:
-    explicit ScaledImageView(std::string source) : miqu::ImageView(std::move(source)) {}
-
-    void set_scale_factor(float factor) {
-        m_scale_factor = std::clamp(factor, 0.1f, 1.0f);
-        request_redraw();
-    }
-    float get_scale_factor() const { return m_scale_factor; }
-
-    void draw(cairo_t* cr, const miqu::Rect& bounds) override {
-        if (m_scale_factor >= 0.999f) {
-            miqu::ImageView::draw(cr, bounds);
-            return;
-        }
-
-        int w = std::max(1, static_cast<int>(bounds.width * m_scale_factor));
-        int h = std::max(1, static_cast<int>(bounds.height * m_scale_factor));
-        int x = bounds.x + (bounds.width - w) / 2;
-        int y = bounds.y + (bounds.height - h) / 2;
-        miqu::Rect scaled_bounds(x, y, w, h);
-        set_bounds(scaled_bounds);
-        miqu::ImageView::draw(cr, scaled_bounds);
-    }
-
-private:
-    float m_scale_factor = 0.90f;
-};
-
-} // anonymous namespace
 
 std::shared_ptr<miqu::View> LockApp::create_background_view(std::shared_ptr<ScreenLockInstance> instance) {
-    const auto& cfg = Config::get();
-    const auto& bg_image_path = cfg.get_background_image();
-    if (bg_image_path.empty()) {
+    const auto& bg_path = Config::get().get_background_path();
+    if (bg_path.empty()) {
         return nullptr;
     }
 
-    auto bg_view = std::make_shared<ScaledImageView>(bg_image_path);
-    bg_view->set_fit_mode(miqu::FitMode::Cover);
-    bg_view->set_quality_mode(miqu::ImageQuality::FullOriginal);
-    bg_view->set_scale_factor(cfg.get_background_scale());
-
-    if (cfg.get_background_scale() < 0.999f) {
-        bg_view->set_corner_radius(cfg.get_corner_radius());
-        bg_view->set_border(1, cfg.get_outline_color().with_alpha(0.35f));
-    }
+    auto bg_view = miqu::ImageViewBuilder::create()
+        ->source(bg_path)
+        ->fitMode(miqu::FitMode::Cover)
+        ->qualityMode(miqu::ImageQuality::FullOriginal)
+        ->build();
 
     bg_view->set_on_click_listener([instance]() {
         if (instance && instance->password_input) {
@@ -146,7 +109,6 @@ std::shared_ptr<miqu::View> LockApp::create_background_view(std::shared_ptr<Scre
         }
     });
 
-    instance->background_view = bg_view;
     return bg_view;
 }
 
@@ -346,7 +308,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
     const auto& cfg = Config::get();
 
     auto root_frame = miqu::FrameLayoutBuilder::create()
-        ->backgroundColor(cfg.get_background_color())
+        ->backgroundColor(cfg.get_bg_fill_color())
         ->build();
 
     // 1. Full-window Background ImageView
