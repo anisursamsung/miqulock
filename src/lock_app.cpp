@@ -18,20 +18,22 @@ LockApp::~LockApp() {
     quit();
 }
 
-bool LockApp::init() {
+LockApp::InitResult LockApp::init() {
     m_engine = miqu::AppEngine::create();
     if (!m_engine) {
         std::cerr << "[miqulock] Failed to initialize AppEngine. Is Wayland running?\n";
-        return false;
+        return InitResult::Failed;
     }
 
     m_engine->set_quit_on_last_window_closed(false);
 
     bool locked = false;
-    bool request_sent = m_engine->lock_session([this, &locked](bool success) {
+    bool request_denied = false;
+    bool request_sent = m_engine->lock_session([this, &locked, &request_denied](bool success) {
         if (!success) {
-            std::cerr << "[miqulock] Session lock request denied by compositor!\n";
-            m_engine->quit(1);
+            std::cerr << "[miqulock] Session lock request denied by compositor (already locked).\n";
+            request_denied = true;
+            m_engine->quit(0);
             return;
         }
         std::cout << "[miqulock] Session locked by compositor.\n";
@@ -40,7 +42,7 @@ bool LockApp::init() {
 
     if (!request_sent) {
         std::cerr << "[miqulock] Failed to request session lock.\n";
-        return false;
+        return InitResult::Failed;
     }
 
     setup_lock_screens();
@@ -54,10 +56,18 @@ bool LockApp::init() {
     });
 
     // Roundtrip to process the configure and lock events
-    while (!locked && m_engine->is_session_locked()) {
+    while (!locked && !request_denied && m_engine->is_session_locked()) {
         if (wl_display_dispatch(m_engine->get_display()) < 0) {
-            return false;
+            return InitResult::Failed;
         }
+    }
+
+    if (request_denied) {
+        return InitResult::AlreadyLocked;
+    }
+
+    if (!locked) {
+        return InitResult::Failed;
     }
 
     m_running = true;
@@ -75,7 +85,7 @@ bool LockApp::init() {
         }
     });
 
-    return true;
+    return InitResult::Success;
 }
 
 std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLockInstance> instance) {

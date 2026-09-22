@@ -26,7 +26,13 @@ public:
     LockApp();
     ~LockApp();
 
-    bool init();
+    enum class InitResult {
+        Success,
+        AlreadyLocked,
+        Failed
+    };
+
+    InitResult init();
     void run();
     void quit();
 
