@@ -81,11 +81,8 @@ int main(int argc, char* argv[]) {
         close(ready_pipe[0]);
     }
 
-    // Load active configuration (creates user config on first launch if absent)
-    Config::get().load(config_path);
-
     LockApp app;
-    LockApp::InitResult res = app.init();
+    LockApp::InitResult res = app.init(config_path);
 
     if (res == LockApp::InitResult::AlreadyLocked) {
         if (ready_pipe[1] >= 0) {

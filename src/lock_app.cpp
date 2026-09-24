@@ -19,7 +19,7 @@ LockApp::~LockApp() {
     quit();
 }
 
-LockApp::InitResult LockApp::init() {
+LockApp::InitResult LockApp::init(const std::string& custom_config_path) {
     m_engine = miqu::AppEngine::create();
     if (!m_engine) {
         std::cerr << "[miqulock] Failed to initialize AppEngine. Is Wayland running?\n";
@@ -27,6 +27,19 @@ LockApp::InitResult LockApp::init() {
     }
 
     m_engine->set_quit_on_last_window_closed(false);
+
+    // Rule 17: Canonical init order (AppEngine -> load overlay -> setup config watcher)
+    Config::get().load(custom_config_path);
+    m_engine->setup_config_watcher();
+
+    m_engine->add_theme_change_listener([this]() {
+        if (m_engine) {
+            m_engine->post([this]() {
+                Config::get().reload();
+                reload_ui();
+            });
+        }
+    });
 
     bool locked = false;
     bool request_denied = false;
@@ -92,7 +105,7 @@ LockApp::InitResult LockApp::init() {
 
 std::shared_ptr<miqu::View> LockApp::create_background_view(std::shared_ptr<ScreenLockInstance> instance) {
     const auto& cfg = Config::get();
-    const auto& bg_path = cfg.get_background_path();
+    const auto& bg_path = cfg.get_wallpaper_path();
     if (bg_path.empty()) {
         return nullptr;
     }
@@ -316,7 +329,7 @@ std::shared_ptr<miqu::View> LockApp::create_lock_view(std::shared_ptr<ScreenLock
     const auto& cfg = Config::get();
 
     auto root_frame = miqu::FrameLayoutBuilder::create()
-        ->backgroundColor(cfg.get_bg_fill_color())
+        ->backgroundColor(cfg.get_background_color().with_alpha(1.0f))
         ->build();
 
     // 1. Full-window Background ImageView
@@ -373,6 +386,17 @@ void LockApp::handle_power_action(const std::string& action) {
             _exit(1);
         }
     }
+}
+
+void LockApp::reload_ui() {
+    for (auto& screen : m_screens) {
+        if (screen && screen->window) {
+            auto view = create_lock_view(screen);
+            screen->window->set_content_view(view);
+            screen->window->schedule_redraw();
+        }
+    }
+    update_time_strings();
 }
 
 void LockApp::setup_lock_screens() {

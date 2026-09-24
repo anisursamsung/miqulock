@@ -33,11 +33,12 @@ public:
         Failed
     };
 
-    InitResult init();
+    InitResult init(const std::string& custom_config_path = "");
     void run();
     void quit();
 
 private:
+    void reload_ui();
     void setup_lock_screens();
     void sync_lock_screens();
     std::shared_ptr<miqu::View> create_lock_view(std::shared_ptr<ScreenLockInstance> instance);

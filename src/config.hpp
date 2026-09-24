@@ -33,8 +33,7 @@ public:
     const std::string& get_font_family() const { return m_font_family; }
     const std::string& get_time_format() const { return m_time_format; }
     const std::string& get_date_format() const { return m_date_format; }
-    const std::string& get_background_path() const { return m_background_path; }
-    const Color& get_bg_fill_color() const { return m_bg_fill_color; }
+    const std::string& get_wallpaper_path() const { return m_wallpaper_path; }
     int get_blur_radius() const { return m_blur_radius; }
     float get_dim_alpha() const { return m_dim_alpha; }
 
@@ -42,9 +41,10 @@ public:
 
 private:
     Config();
-    void set_defaults();
+    void sync_defaults_from_toolkit();
     void load_file(const std::string& path, int depth = 0);
     std::string resolve_path(const std::string& path) const;
+    bool parse_wallpaper_file(const std::string& path_val, std::string& out_path) const;
     void sync_toolkit_config();
 
     std::string m_config_path;
@@ -63,8 +63,7 @@ private:
     std::string m_font_family = "Sans";
     std::string m_time_format = "%H:%M";
     std::string m_date_format = "%A, %B %d";
-    std::string m_background_path;
-    Color m_bg_fill_color;
+    std::string m_wallpaper_path;
     int m_blur_radius = 0;
     float m_dim_alpha = 0.0f;
 };
