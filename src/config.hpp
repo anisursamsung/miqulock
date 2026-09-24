@@ -17,7 +17,7 @@ public:
     const std::string& get_config_path() const { return m_config_path; }
 
     static std::string get_user_config_path();
-    static std::string ensure_user_config();
+    static std::string init_user_config();
 
     const Color& get_primary_color() const { return m_primary; }
     const Color& get_on_primary_color() const { return m_on_primary; }

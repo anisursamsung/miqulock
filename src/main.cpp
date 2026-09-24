@@ -30,6 +30,14 @@ int main(int argc, char* argv[]) {
         if (arg == "-h" || arg == "--help") {
             print_usage(argv[0]);
             return 0;
+        } else if (arg == "--init-config") {
+            std::string res = miqu::Config::init_user_config("miqulock", "miqulock.conf");
+            if (!res.empty()) {
+                std::cout << "[miqulock] Configuration initialized at: " << res << "\n";
+            } else {
+                std::cout << "[miqulock] Configuration file already exists or could not be created.\n";
+            }
+            return 0;
         } else if (arg == "-v" || arg == "--version") {
             std::cout << "miqulock 0.1.0\n";
             return 0;
